@@ -1,0 +1,28 @@
+{
+  "server": {
+    "host": "0.0.0.0",
+    "port": 8000,
+    "log_level": "info",
+    "enable_tray_icon": true
+  },
+  "screen_capture": {
+    "fps": 30,
+    "quality": 75,
+    "max_width": 1280
+  },
+  "audio_streaming": {
+    "default_port": 50005,
+    "sample_rate": 44100,
+    "channels": 2
+  },
+  "scrcpy": {
+    "auto_detect": true,
+    "custom_path": "",
+    "max_fps": 60,
+    "bitrate_mbps": 8
+  },
+  "system": {
+    "autostart_with_windows": true,
+    "auto_game_mode": false
+  }
+}

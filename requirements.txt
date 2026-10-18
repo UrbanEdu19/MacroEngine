@@ -1,0 +1,35 @@
+# ============================================================
+# MacroEngine Desktop Server - Dependências
+# Python 3.10+ recomendado (Windows / Linux)
+# ============================================================
+
+# Framework Web & API REST Assíncrona
+fastapi>=0.111.0
+uvicorn[standard]>=0.30.0
+pydantic>=2.7.0
+python-multipart>=0.0.9
+
+# Automação de Teclado, Mouse e Entradas
+pyautogui>=0.9.54
+
+# Controle de Áudio Master no Windows
+pycaw>=20240210; sys_platform == 'win32'
+comtypes>=1.4.0; sys_platform == 'win32'
+
+# Streaming de Áudio em Baixa Latência (UDP PCM + WASAPI Loopback)
+PyAudioWPatch>=0.2.12; sys_platform == 'win32'
+pyaudio>=0.2.14; sys_platform != 'win32'
+numpy>=1.26.0
+
+# Captura de Tela Ultra-Rápida (DirectX / GDI BitBlt)
+mss>=10.0.0
+pillow>=10.0.0
+
+# Monitoramento de Hardware, Rede & MAC Físico
+psutil>=5.9.0
+
+# Ícone e Controle na Bandeja do Sistema (System Tray)
+pystray>=0.19.5; sys_platform == 'win32'
+
+# Utilitários de Requisição
+requests>=2.31.0

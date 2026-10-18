@@ -1,0 +1,57 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Logs
+*.log
+logs/
+
+# Modelos Grandes de IA (> 100MB não permitidos no GitHub)
+models/*.bin
+models/*.task
+models/*.gguf
+models/*.onnx
+!models/.gitkeep
+!models/README.md
+
+# Arquivos de Compartilhamento Temporários
+shared_files/*
+!shared_files/.gitkeep
+!shared_files/Bem_Vindo_Compartilhamento.txt
+
+# IDEs & Editores
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Sistema Operacional
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Temporários
+*.tmp
+*.bak
