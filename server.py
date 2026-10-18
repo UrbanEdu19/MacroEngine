@@ -2268,12 +2268,12 @@ def download_server_slm_model():
 @app.get("/api/download/apk")
 def download_app_apk():
     """Permite ao usuário baixar o APK atualizado diretamente pelo celular ou PC."""
-    local_apk = os.path.join(os.path.dirname(os.path.abspath(__file__)), "MacroEngine-1.1.8v.apk")
+    local_apk = os.path.join(os.path.dirname(os.path.abspath(__file__)), "MacroEngine-1.1.9v.apk")
     if os.path.exists(local_apk):
-        return FileResponse(local_apk, filename="MacroEngine-1.1.8v.apk", media_type="application/vnd.android.package-archive")
+        return FileResponse(local_apk, filename="MacroEngine-1.1.9v.apk", media_type="application/vnd.android.package-archive")
     apk_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "app", "build", "outputs", "apk", "debug", "app-debug.apk")
     if os.path.exists(apk_path):
-        return FileResponse(apk_path, filename="MacroEngine-1.1.8v.apk", media_type="application/vnd.android.package-archive")
+        return FileResponse(apk_path, filename="MacroEngine-1.1.9v.apk", media_type="application/vnd.android.package-archive")
     raise HTTPException(status_code=404, detail="APK não encontrado.")
 
 
@@ -2981,6 +2981,498 @@ def trigger_phone_macro(macro_id: str):
         return {"status": "ok", "macro": macro_id, "target": "phone"}
 
     raise HTTPException(status_code=404, detail=f"Macro do celular '{macro_id}' não encontrada")
+
+# ===========================================================================
+# 1. MONITOR DE HARDWARE EM TEMPO REAL (TELEMETRIA GAMER HUD)
+# ===========================================================================
+_last_net_time = 0.0
+_last_bytes_sent = 0
+_last_bytes_recv = 0
+_net_lock = threading.Lock()
+
+def _get_gpu_telemetry() -> Optional[Dict[str, Any]]:
+    import shutil
+    nvidia_smi = shutil.which("nvidia-smi")
+    if not nvidia_smi and os.path.exists(r"C:\Windows\system32\nvidia-smi.exe"):
+        nvidia_smi = r"C:\Windows\system32\nvidia-smi.exe"
+    if nvidia_smi:
+        try:
+            out = subprocess.check_output(
+                [nvidia_smi, "--query-gpu=name,temperature.gpu,utilization.gpu,memory.used,memory.total", "--format=csv,noheader,nounits"],
+                encoding="utf-8",
+                timeout=1.5
+            )
+            parts = [p.strip() for p in out.strip().split(",")]
+            if len(parts) >= 5:
+                return {
+                    "name": parts[0],
+                    "temperature_c": int(parts[1]) if parts[1].isdigit() else 0,
+                    "usage_percent": int(parts[2]) if parts[2].isdigit() else 0,
+                    "memory_used_mb": int(parts[3]) if parts[3].isdigit() else 0,
+                    "memory_total_mb": int(parts[4]) if parts[4].isdigit() else 0
+                }
+        except Exception:
+            pass
+    return None
+
+@app.get("/api/hardware/telemetry")
+def get_hardware_telemetry():
+    """Retorna telemetria completa de hardware do PC em tempo real."""
+    global _last_net_time, _last_bytes_sent, _last_bytes_recv
+    import psutil
+
+    # CPU
+    cpu_percent = psutil.cpu_percent(interval=None)
+    cpu_freq = psutil.cpu_freq()
+    cpu_cores = psutil.cpu_count(logical=True)
+
+    # RAM
+    ram = psutil.virtual_memory()
+
+    # Discos
+    disks = []
+    for part in psutil.disk_partitions(all=False):
+        try:
+            if "cdrom" in part.opts or part.fstype == "":
+                continue
+            usage = psutil.disk_usage(part.mountpoint)
+            disks.append({
+                "device": part.device,
+                "mountpoint": part.mountpoint,
+                "total_gb": round(usage.total / (1024**3), 1),
+                "used_gb": round(usage.used / (1024**3), 1),
+                "free_gb": round(usage.free / (1024**3), 1),
+                "percent": usage.percent
+            })
+        except Exception:
+            pass
+
+    # Rede (Cálculo de taxa KB/s)
+    now = time.time()
+    net = psutil.net_io_counters()
+    upload_kbps = 0.0
+    download_kbps = 0.0
+    with _net_lock:
+        if _last_net_time > 0 and now > _last_net_time:
+            dt = now - _last_net_time
+            if dt > 0.1:
+                upload_kbps = round((net.bytes_sent - _last_bytes_sent) / 1024 / dt, 1)
+                download_kbps = round((net.bytes_recv - _last_bytes_recv) / 1024 / dt, 1)
+        _last_net_time = now
+        _last_bytes_sent = net.bytes_sent
+        _last_bytes_recv = net.bytes_recv
+
+    # GPU
+    gpu = _get_gpu_telemetry()
+
+    return {
+        "status": "ok",
+        "timestamp": int(now),
+        "cpu": {
+            "percent": cpu_percent,
+            "freq_ghz": round(cpu_freq.current / 1000, 2) if cpu_freq else 0.0,
+            "cores": cpu_cores
+        },
+        "ram": {
+            "percent": ram.percent,
+            "used_gb": round(ram.used / (1024**3), 1),
+            "total_gb": round(ram.total / (1024**3), 1),
+            "free_gb": round(ram.available / (1024**3), 1)
+        },
+        "network": {
+            "upload_kbps": max(0.0, upload_kbps),
+            "download_kbps": max(0.0, download_kbps)
+        },
+        "gpu": gpu,
+        "disks": disks
+    }
+
+
+# ===========================================================================
+# 2. MIXER DE ÁUDIO POR APLICATIVO (WINDOWS AUDIO SESSIONS)
+# ===========================================================================
+class AudioSessionVolumeRequest(BaseModel):
+    pid: int
+    volume: int  # 0 a 100
+
+class AudioSessionMuteRequest(BaseModel):
+    pid: int
+    muted: bool
+
+@app.get("/api/audio/sessions")
+def list_audio_sessions():
+    """Lista todos os aplicativos ativos com sessão de áudio no Windows."""
+    if sys.platform != "win32":
+        return {"sessions": []}
+    try:
+        try:
+            ctypes.windll.ole32.CoInitialize(None)
+        except Exception:
+            pass
+        from pycaw.pycaw import AudioUtilities, ISimpleAudioVolume
+        sessions = AudioUtilities.GetAllSessions()
+        result = []
+        seen_pids = set()
+        for session in sessions:
+            if not session.Process:
+                continue
+            pid = session.Process.pid
+            if pid in seen_pids:
+                continue
+            seen_pids.add(pid)
+            try:
+                name = session.Process.name()
+                volume_ctrl = session._ctl.QueryInterface(ISimpleAudioVolume)
+                vol = round(volume_ctrl.GetMasterVolume() * 100)
+                muted = bool(volume_ctrl.GetMute())
+                
+                friendly_name = os.path.splitext(name)[0]
+                if friendly_name.lower() == "chrome": friendly_name = "Google Chrome"
+                elif friendly_name.lower() == "msedge": friendly_name = "Microsoft Edge"
+                elif friendly_name.lower() == "spotify": friendly_name = "Spotify"
+                elif friendly_name.lower() == "discord": friendly_name = "Discord"
+                elif friendly_name.lower() == "steam": friendly_name = "Steam"
+
+                result.append({
+                    "pid": pid,
+                    "process_name": name,
+                    "display_name": friendly_name,
+                    "volume": vol,
+                    "muted": muted
+                })
+            except Exception:
+                pass
+        return {"status": "ok", "sessions": result}
+    except Exception as e:
+        logger.warning(f"Erro ao listar sessões de áudio: {e}")
+        return {"status": "error", "message": str(e), "sessions": []}
+
+@app.post("/api/audio/sessions/set-volume")
+def set_audio_session_volume(req: AudioSessionVolumeRequest):
+    """Ajusta o volume de um aplicativo específico por PID."""
+    if sys.platform != "win32":
+        raise HTTPException(status_code=501, detail="Disponível apenas no Windows")
+    try:
+        try:
+            ctypes.windll.ole32.CoInitialize(None)
+        except Exception:
+            pass
+        from pycaw.pycaw import AudioUtilities, ISimpleAudioVolume
+        target_vol = max(0.0, min(1.0, req.volume / 100.0))
+        for session in AudioUtilities.GetAllSessions():
+            if session.Process and session.Process.pid == req.pid:
+                volume_ctrl = session._ctl.QueryInterface(ISimpleAudioVolume)
+                volume_ctrl.SetMasterVolume(target_vol, None)
+                return {"status": "ok", "pid": req.pid, "volume": req.volume}
+        raise HTTPException(status_code=404, detail="Processo de áudio não encontrado")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/audio/sessions/set-mute")
+def set_audio_session_mute(req: AudioSessionMuteRequest):
+    """Muta ou desmuta um aplicativo específico por PID."""
+    if sys.platform != "win32":
+        raise HTTPException(status_code=501, detail="Disponível apenas no Windows")
+    try:
+        try:
+            ctypes.windll.ole32.CoInitialize(None)
+        except Exception:
+            pass
+        from pycaw.pycaw import AudioUtilities, ISimpleAudioVolume
+        for session in AudioUtilities.GetAllSessions():
+            if session.Process and session.Process.pid == req.pid:
+                volume_ctrl = session._ctl.QueryInterface(ISimpleAudioVolume)
+                volume_ctrl.SetMute(1 if req.muted else 0, None)
+                return {"status": "ok", "pid": req.pid, "muted": req.muted}
+        raise HTTPException(status_code=404, detail="Processo de áudio não encontrado")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ===========================================================================
+# 3. TOUCHPAD VIRTUAL & AIR MOUSE (CONTROLE DE SOFÁ)
+# ===========================================================================
+class TrackpadMoveRequest(BaseModel):
+    dx: float
+    dy: float
+
+class MouseClickRequest(BaseModel):
+    button: str = "left"
+    double: Optional[bool] = False
+    click_type: Optional[str] = "single"
+
+class MouseScrollRequest(BaseModel):
+    clicks: Optional[int] = None
+    dx: Optional[float] = 0.0
+    dy: Optional[float] = None
+
+class KeyboardInputRequest(BaseModel):
+    text: str
+
+class KeyboardKeyRequest(BaseModel):
+    key: str
+
+@app.post("/api/mouse/trackpad")
+def mouse_trackpad_move(req: TrackpadMoveRequest):
+    """Move o ponteiro do mouse relativamente de forma ultra-rápida."""
+    try:
+        if sys.platform == "win32":
+            # MOUSEEVENTF_MOVE = 0x0001
+            ctypes.windll.user32.mouse_event(0x0001, int(round(req.dx)), int(round(req.dy)), 0, 0)
+            return {"status": "ok"}
+        elif pyautogui:
+            pyautogui.moveRel(req.dx, req.dy, _pause=False)
+            return {"status": "ok"}
+        return {"status": "disabled"}
+    except Exception as e:
+        logger.warning(f"Erro ao mover mouse: {e}")
+        return {"status": "error", "message": str(e)}
+
+@app.post("/api/mouse/click")
+def mouse_click_action(req: MouseClickRequest):
+    """Executa clique no mouse (esquerdo, direito, meio, duplo)."""
+    btn = (req.button or "left").lower()
+    is_double = bool(req.double) or (req.click_type == "double")
+
+    try:
+        if sys.platform == "win32":
+            if btn == "left":
+                # MOUSEEVENTF_LEFTDOWN = 0x0002, LEFTUP = 0x0004
+                ctypes.windll.user32.mouse_event(0x0002, 0, 0, 0, 0)
+                ctypes.windll.user32.mouse_event(0x0004, 0, 0, 0, 0)
+                if is_double:
+                    time.sleep(0.05)
+                    ctypes.windll.user32.mouse_event(0x0002, 0, 0, 0, 0)
+                    ctypes.windll.user32.mouse_event(0x0004, 0, 0, 0, 0)
+            elif btn == "right":
+                # MOUSEEVENTF_RIGHTDOWN = 0x0008, RIGHTUP = 0x0010
+                ctypes.windll.user32.mouse_event(0x0008, 0, 0, 0, 0)
+                ctypes.windll.user32.mouse_event(0x0010, 0, 0, 0, 0)
+            elif btn in ("middle", "meio"):
+                # MOUSEEVENTF_MIDDLEDOWN = 0x0020, MIDDLEUP = 0x0040
+                ctypes.windll.user32.mouse_event(0x0020, 0, 0, 0, 0)
+                ctypes.windll.user32.mouse_event(0x0040, 0, 0, 0, 0)
+            return {"status": "ok", "button": btn, "double": is_double}
+        elif pyautogui:
+            if is_double:
+                pyautogui.doubleClick(button=btn, _pause=False)
+            else:
+                pyautogui.click(button=btn, _pause=False)
+            return {"status": "ok", "button": btn, "double": is_double}
+        return {"status": "disabled"}
+    except Exception as e:
+        logger.warning(f"Erro ao clicar: {e}")
+        return {"status": "error", "message": str(e)}
+
+@app.post("/api/mouse/scroll")
+def mouse_scroll_action(req: MouseScrollRequest):
+    """Executa rolagem da roda do mouse."""
+    try:
+        val = 0
+        if req.clicks is not None:
+            val = int(req.clicks)
+        elif req.dy is not None:
+            val = int(round(req.dy))
+        
+        if val == 0:
+            val = 1 if (req.dy or 0) > 0 else -1
+
+        if sys.platform == "win32":
+            # MOUSEEVENTF_WHEEL = 0x0800. Cada 'notch' de scroll padrão do Windows é 120
+            wheel_delta = val * 60
+            ctypes.windll.user32.mouse_event(0x0800, 0, 0, wheel_delta, 0)
+            return {"status": "ok", "scroll": val}
+        elif pyautogui:
+            pyautogui.scroll(val, _pause=False)
+            return {"status": "ok", "scroll": val}
+        return {"status": "disabled"}
+    except Exception as e:
+        logger.warning(f"Erro no scroll: {e}")
+        return {"status": "error", "message": str(e)}
+
+@app.post("/api/keyboard/input")
+def keyboard_input_text(req: KeyboardInputRequest):
+    """Digita texto recebido do celular no aplicativo ativo do PC."""
+    if not req.text:
+        return {"status": "ok", "length": 0}
+    try:
+        import pyperclip
+        pyperclip.copy(req.text)
+        time.sleep(0.04)
+        if pyautogui:
+            pyautogui.hotkey("ctrl", "v", _pause=False)
+        return {"status": "ok", "length": len(req.text)}
+    except Exception as e:
+        logger.warning(f"Erro ao colar texto via clipboard: {e}")
+        if pyautogui:
+            try:
+                pyautogui.write(req.text, interval=0.005)
+                return {"status": "ok", "fallback": True}
+            except Exception as e2:
+                logger.error(f"Erro fallback pyautogui.write: {e2}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/keyboard/key")
+def keyboard_press_key(req: KeyboardKeyRequest):
+    """Pressiona tecla ou atalho composto (ex: ctrl+c, alt+tab, win, enter)."""
+    k = req.key.strip().lower()
+    try:
+        if not pyautogui:
+            return {"status": "disabled"}
+
+        if "+" in k:
+            parts = [p.strip() for p in k.split("+")]
+            mapped = []
+            for p in parts:
+                if p in ("ctrl", "control"): mapped.append("ctrl")
+                elif p in ("alt", "menu"): mapped.append("alt")
+                elif p in ("shift"): mapped.append("shift")
+                elif p in ("win", "windows", "cmd"): mapped.append("win")
+                else: mapped.append(p)
+            pyautogui.hotkey(*mapped, _pause=False)
+            return {"status": "ok", "hotkey": mapped}
+        elif k in ("win", "windows"):
+            pyautogui.press("win", _pause=False)
+            return {"status": "ok", "key": "win"}
+        else:
+            pyautogui.press(k, _pause=False)
+            return {"status": "ok", "key": k}
+    except Exception as e:
+        logger.warning(f"Erro ao pressionar tecla '{k}': {e}")
+        return {"status": "error", "message": str(e)}
+
+
+# ===========================================================================
+# 4. CENTRAL DE ENERGIA & TIMER INTELIGENTE (SLEEP TIMER)
+# ===========================================================================
+_sleep_timer_deadline: Optional[float] = None
+_sleep_timer_action: Optional[str] = None
+_power_lock = threading.Lock()
+
+class SleepTimerRequest(BaseModel):
+    minutes: int
+    action: str = "shutdown"
+
+class PowerActionRequest(BaseModel):
+    action: str
+
+@app.post("/api/power/sleep-timer")
+def set_sleep_timer(req: SleepTimerRequest):
+    """Programa timer para desligar, suspender ou apagar telas em X minutos."""
+    global _sleep_timer_deadline, _sleep_timer_action
+    with _power_lock:
+        if req.minutes <= 0:
+            return cancel_sleep_timer()
+        
+        seconds = req.minutes * 60
+        _sleep_timer_deadline = time.time() + seconds
+        _sleep_timer_action = req.action
+
+        if sys.platform == "win32":
+            if req.action == "shutdown":
+                subprocess.Popen(["shutdown", "/s", "/t", str(seconds)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            elif req.action == "restart":
+                subprocess.Popen(["shutdown", "/r", "/t", str(seconds)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        return {
+            "status": "ok",
+            "minutes": req.minutes,
+            "seconds": seconds,
+            "action": req.action,
+            "message": f"Timer programado para {req.minutes} minuto(s)!"
+        }
+
+@app.post("/api/power/cancel-timer")
+def cancel_sleep_timer():
+    """Cancela qualquer timer de energia ativo."""
+    global _sleep_timer_deadline, _sleep_timer_action
+    with _power_lock:
+        _sleep_timer_deadline = None
+        _sleep_timer_action = None
+        if sys.platform == "win32":
+            subprocess.Popen(["shutdown", "/a"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return {"status": "ok", "message": "Timer cancelado com sucesso!"}
+
+@app.get("/api/power/timer-status")
+def get_sleep_timer_status():
+    """Retorna tempo restante do timer de energia."""
+    global _sleep_timer_deadline, _sleep_timer_action
+    with _power_lock:
+        if _sleep_timer_deadline is not None:
+            remaining = int(_sleep_timer_deadline - time.time())
+            if remaining > 0:
+                return {
+                    "active": True,
+                    "remaining_seconds": remaining,
+                    "action": _sleep_timer_action
+                }
+            else:
+                _sleep_timer_deadline = None
+                _sleep_timer_action = None
+        return {"active": False, "remaining_seconds": 0, "action": None}
+
+@app.post("/api/power/action")
+def execute_power_action(req: PowerActionRequest):
+    """Executa ação imediata de energia no PC."""
+    act = req.action.lower()
+    if act == "turn_off_screens":
+        if sys.platform == "win32":
+            ctypes.windll.user32.SendMessageW(0xFFFF, 0x0112, 0xF170, 2)
+            return {"status": "ok", "action": act, "message": "Monitores desligados!"}
+    elif act == "lock":
+        if sys.platform == "win32":
+            ctypes.windll.user32.LockWorkStation()
+            return {"status": "ok", "action": act, "message": "Estação bloqueada!"}
+    elif act == "sleep":
+        if sys.platform == "win32":
+            subprocess.Popen(["rundll32.exe", "powrprof.dll,SetSuspendState", "0,1,0"])
+            return {"status": "ok", "action": act, "message": "Entrando em suspensão..."}
+    elif act == "restart":
+        if sys.platform == "win32":
+            subprocess.Popen(["shutdown", "/r", "/t", "0"])
+            return {"status": "ok", "action": act, "message": "Reiniciando..."}
+    elif act == "shutdown":
+        if sys.platform == "win32":
+            subprocess.Popen(["shutdown", "/s", "/t", "0"])
+            return {"status": "ok", "action": act, "message": "Desligando..."}
+
+    raise HTTPException(status_code=400, detail=f"Ação de energia '{req.action}' desconhecida.")
+
+
+# ===========================================================================
+# 5. ÁREA DE TRANSFERÊNCIA UNIFICADA (UNIVERSAL CLIPBOARD)
+# ===========================================================================
+class ClipboardSetRequest(BaseModel):
+    text: str
+    auto_paste: bool = False
+
+@app.get("/api/clipboard")
+def get_clipboard_content():
+    """Retorna o conteúdo atual da área de transferência do PC."""
+    try:
+        import pyperclip
+        val = pyperclip.paste() or ""
+        return {"status": "ok", "text": val, "length": len(val)}
+    except Exception as e:
+        return {"status": "error", "message": str(e), "text": ""}
+
+@app.post("/api/clipboard")
+def set_clipboard_content(req: ClipboardSetRequest):
+    """Define o texto copiado no PC com opção de colar automático (Ctrl+V)."""
+    try:
+        import pyperclip
+        pyperclip.copy(req.text)
+        if req.auto_paste and pyautogui:
+            time.sleep(0.1)
+            pyautogui.hotkey("ctrl", "v", _pause=False)
+        return {
+            "status": "ok",
+            "message": "Texto copiado para a Área de Transferência do PC!",
+            "length": len(req.text),
+            "pasted": req.auto_paste
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 # ---------------------------------------------------------------------------
 # INICIALIZAÇÃO VIA TERMINAL
