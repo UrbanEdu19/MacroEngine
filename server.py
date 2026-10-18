@@ -2268,9 +2268,12 @@ def download_server_slm_model():
 @app.get("/api/download/apk")
 def download_app_apk():
     """Permite ao usuário baixar o APK atualizado diretamente pelo celular ou PC."""
+    local_apk = os.path.join(os.path.dirname(os.path.abspath(__file__)), "MacroEngine-1.1.8v.apk")
+    if os.path.exists(local_apk):
+        return FileResponse(local_apk, filename="MacroEngine-1.1.8v.apk", media_type="application/vnd.android.package-archive")
     apk_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "app", "build", "outputs", "apk", "debug", "app-debug.apk")
     if os.path.exists(apk_path):
-        return FileResponse(apk_path, filename="MacroEngine.apk", media_type="application/vnd.android.package-archive")
+        return FileResponse(apk_path, filename="MacroEngine-1.1.8v.apk", media_type="application/vnd.android.package-archive")
     raise HTTPException(status_code=404, detail="APK não encontrado.")
 
 

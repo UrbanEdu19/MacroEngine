@@ -38,6 +38,8 @@ O **MacroEngine Desktop Server** é a espinha dorsal do ecossistema MacroEngine.
 5. **Ícone na Bandeja do Sistema (System Tray)**: Acesso rápido a status em tempo real, documentação Swagger, alternador de Modo Jogo Turbo e controle de autostart diretamente pela bandeja do Windows.
 6. **Modo Jogo Turbo & Mais de 100 Macros**: Comandos táticos para os jogos mais jogados do momento (CS2, Deadlock, Warzone, Helldivers 2, PUBG, Apex, Valorant, Delta Force, Battlefield), controle de clipes Nvidia ShadowPlay, OBS Studio, Discord, além de macros de produtividade e controle do próprio celular via ADB.
 
+> 📱 **Aplicativo Android Pronto para Instalação:** O instalador **`MacroEngine-1.1.8v.apk`** já está incluso diretamente na raiz deste repositório! Basta passá-lo para o seu celular Android e instalar diretamente, sem precisar de Android Studio ou compilação.
+
 ---
 
 ## 🏗 Arquitetura do Sistema
