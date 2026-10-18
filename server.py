@@ -3212,12 +3212,33 @@ class KeyboardInputRequest(BaseModel):
 class KeyboardKeyRequest(BaseModel):
     key: str
 
+if sys.platform == "win32":
+    class _POINT(ctypes.Structure):
+        _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+def ensure_default_desktop():
+    """Garante que a thread atual esteja vinculada à Área de Trabalho Interativa (Default) do usuário."""
+    if sys.platform == "win32":
+        try:
+            hdesk = ctypes.windll.user32.OpenDesktopW("Default", 0, False, 0x01FF)
+            if hdesk:
+                ctypes.windll.user32.SetThreadDesktop(hdesk)
+        except Exception:
+            pass
+
 @app.post("/api/mouse/trackpad")
 def mouse_trackpad_move(req: TrackpadMoveRequest):
-    """Move o ponteiro do mouse relativamente de forma ultra-rápida."""
+    """Move o ponteiro do mouse relativamente de forma ultra-rápida na tela real do usuário."""
+    ensure_default_desktop()
     try:
         if sys.platform == "win32":
-            # MOUSEEVENTF_MOVE = 0x0001
+            pt = _POINT()
+            if ctypes.windll.user32.GetCursorPos(ctypes.byref(pt)):
+                new_x = int(pt.x + round(req.dx))
+                new_y = int(pt.y + round(req.dy))
+                ctypes.windll.user32.SetCursorPos(new_x, new_y)
+                return {"status": "ok"}
+            # Fallback se GetCursorPos falhar
             ctypes.windll.user32.mouse_event(0x0001, int(round(req.dx)), int(round(req.dy)), 0, 0)
             return {"status": "ok"}
         elif pyautogui:
@@ -3231,6 +3252,7 @@ def mouse_trackpad_move(req: TrackpadMoveRequest):
 @app.post("/api/mouse/click")
 def mouse_click_action(req: MouseClickRequest):
     """Executa clique no mouse (esquerdo, direito, meio, duplo)."""
+    ensure_default_desktop()
     btn = (req.button or "left").lower()
     is_double = bool(req.double) or (req.click_type == "double")
 
@@ -3267,6 +3289,7 @@ def mouse_click_action(req: MouseClickRequest):
 @app.post("/api/mouse/scroll")
 def mouse_scroll_action(req: MouseScrollRequest):
     """Executa rolagem da roda do mouse."""
+    ensure_default_desktop()
     try:
         val = 0
         if req.clicks is not None:
@@ -3293,6 +3316,7 @@ def mouse_scroll_action(req: MouseScrollRequest):
 @app.post("/api/keyboard/input")
 def keyboard_input_text(req: KeyboardInputRequest):
     """Digita texto recebido do celular no aplicativo ativo do PC."""
+    ensure_default_desktop()
     if not req.text:
         return {"status": "ok", "length": 0}
     try:
@@ -3315,6 +3339,7 @@ def keyboard_input_text(req: KeyboardInputRequest):
 @app.post("/api/keyboard/key")
 def keyboard_press_key(req: KeyboardKeyRequest):
     """Pressiona tecla ou atalho composto (ex: ctrl+c, alt+tab, win, enter)."""
+    ensure_default_desktop()
     k = req.key.strip().lower()
     try:
         if not pyautogui:
