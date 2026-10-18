@@ -14,7 +14,6 @@
 </p>
 
 [Visão Geral](#-visão-geral) •
-[Arquitetura](#-arquitetura-do-sistema) •
 [Recursos](#-recursos-principais) •
 [Instalação Rápida](#-instalação-rápida-em-1-clique) •
 [Iniciar com o Windows](#-inicialização-automática-com-o-windows) •
@@ -40,55 +39,6 @@ O **MacroEngine Desktop Server** é a espinha dorsal do ecossistema MacroEngine.
 6. **Modo Jogo Turbo & Mais de 100 Macros**: Comandos táticos para os jogos mais jogados do momento (CS2, Deadlock, Warzone, Helldivers 2, PUBG, Apex, Valorant, Delta Force, Battlefield), controle de clipes Nvidia ShadowPlay, OBS Studio, Discord, além de macros de produtividade e controle do próprio celular via ADB.
 
 > 📱 **Aplicativo Android Pronto para Instalação:** O instalador **`MacroEngine-1.1.9v.apk`** já está incluso diretamente na raiz deste repositório! Basta passá-lo para o seu celular Android e instalar diretamente, sem precisar de Android Studio ou compilação.
-
----
-
-## 🏗 Arquitetura do Sistema
-
-```mermaid
-flowchart TD
-    subgraph Mobile ["📱 Smartphone Android (Remote Master App)"]
-        UI["Interface Gráfica (Flutter/Jetpack Compose)"]
-        AudioRecv["Player de Áudio UDP (Porta 50005)"]
-        HTTPClient["Cliente HTTP REST (Porta 8000)"]
-    end
-
-    subgraph Server ["💻 Desktop Server (FastAPI + AsyncIO)"]
-        Router["FastAPI Router (/api)"]
-        Tray["System Tray (pystray)"]
-        ConfigManager["Config Manager (config.json)"]
-        ScreenWorker["Capturador de Tela DirectX (MSS/GDI)"]
-        AudioWorker["Audio Streamer UDP (PyAudio/PCM)"]
-        MacroEngine["Engine de Macros (PyAutoGUI + OS)"]
-        ScrcpyBridge["Scrcpy / ADB Bridge"]
-    end
-
-    subgraph OS ["🪟 Windows OS & Hardware"]
-        WinRegistry["Registro (HKCU Run Autostart)"]
-        PowerCfg["Plano de Energia Turbo (powercfg)"]
-        WinAudio["Áudio Master (pycaw CoreAudio)"]
-        Display["Monitores & GPU (Desktop winsta0)"]
-        NIC["Placa de Rede Física (Wake-on-LAN)"]
-    end
-
-    UI -->|Comandos REST| HTTPClient
-    HTTPClient -->|TCP 8000| Router
-    AudioWorker -.->|UDP 50005 (PCM 44.1kHz)| AudioRecv
-    ScreenWorker -->|Frames JPEG / Stream| UI
-
-    Router --> MacroEngine
-    Router --> ScreenWorker
-    Router --> AudioWorker
-    Router --> ScrcpyBridge
-    Router --> ConfigManager
-
-    Tray -->|Status & Controle| ConfigManager
-    MacroEngine -->|Controle de Teclas/Mouse| Display
-    MacroEngine -->|Plano de Alto Desempenho| PowerCfg
-    MacroEngine -->|Silêncio Absoluto| WinAudio
-    ConfigManager -->|Auto-Start| WinRegistry
-    Router -->|Diagnóstico MAC| NIC
-```
 
 ---
 
