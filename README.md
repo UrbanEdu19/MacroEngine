@@ -20,7 +20,8 @@
 [Iniciar com o Windows](#-inicialização-automática-com-o-windows) •
 [Endpoints da API](#-documentação-da-api-rest) •
 [Macros](#-tabela-de-macros-embutidas) •
-[Diagnóstico](#-diagnóstico-e-testes)
+[Diagnóstico](#-diagnóstico-e-testes) •
+[Apoie o Projeto](#-apoie-o-projeto--contribuição)
 </div>
 
 ---
@@ -153,8 +154,8 @@ flowchart TD
 
 1. Clone ou baixe este repositório no seu computador:
    ```bash
-   git clone https://github.com/seu-usuario/remote-master-pro.git
-   cd remote-master-pro/server
+   git clone https://github.com/UrbanEdu19/MacroEngine.git
+   cd MacroEngine
    ```
 
 2. **Execute o configurador automático de ambiente**:
@@ -502,7 +503,7 @@ O script testa automaticamente:
 ## 📁 Estrutura de Arquivos
 
 ```text
-server/
+├── MacroEngine-1.1.8v.apk        # Instalador Android oficial pronto para uso
 ├── config.json                  # Arquivo de configurações personalizáveis
 ├── server.py                    # Servidor principal (FastAPI, sockets, macros, tray)
 ├── requirements.txt             # Dependências oficiais versionadas
@@ -515,10 +516,27 @@ server/
 ├── stop_server.bat              # Encerra graciosamente os processos do servidor
 ├── register_firewall.bat        # Libera portas 8000 e 50005 no Firewall do Windows
 ├── test_server.py               # Suite de auto-diagnóstico e testes de saúde
+├── models/                      # Pasta para modelos de inteligência artificial locais
 ├── shared_files/                # Pasta de arquivos compartilhados entre PC e Celular
 ├── LICENSE                      # Licença MIT
 └── README.md                    # Documentação completa do projeto
 ```
+
+---
+
+## ☕ Apoie o Projeto / Contribuição
+
+Se o **MacroEngine** te ajudou ou foi útil no seu dia a dia e você deseja incentivar o desenvolvimento contínuo, novas atualizações e novas macros, qualquer contribuição é muito bem-vinda!
+
+<div align="center">
+
+### 💠 Chave PIX:
+```text
+41998205303
+```
+*Muito obrigado pelo apoio à evolução da ferramenta!* 🚀
+
+</div>
 
 ---
 
