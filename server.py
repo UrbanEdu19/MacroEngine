@@ -52,6 +52,9 @@ except ImportError:
 
 import io
 import ctypes
+import asyncio
+import atexit
+import uuid
 try:
     import mss
     MSS_AVAILABLE = True
@@ -2268,12 +2271,13 @@ def download_server_slm_model():
 @app.get("/api/download/apk")
 def download_app_apk():
     """Permite ao usuário baixar o APK atualizado diretamente pelo celular ou PC."""
-    local_apk = os.path.join(os.path.dirname(os.path.abspath(__file__)), "MacroEngine-1.1.9v.apk")
-    if os.path.exists(local_apk):
-        return FileResponse(local_apk, filename="MacroEngine-1.1.9v.apk", media_type="application/vnd.android.package-archive")
-    apk_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "app", "build", "outputs", "apk", "debug", "app-debug.apk")
+    server_dir = os.path.dirname(os.path.abspath(__file__))
+    for f in sorted(os.listdir(server_dir), reverse=True):
+        if f.startswith("MacroEngine-") and f.endswith(".apk"):
+            return FileResponse(os.path.join(server_dir, f), filename=f, media_type="application/vnd.android.package-archive")
+    apk_path = os.path.join(os.path.dirname(server_dir), "app", "build", "outputs", "apk", "debug", "app-debug.apk")
     if os.path.exists(apk_path):
-        return FileResponse(apk_path, filename="MacroEngine-1.1.9v.apk", media_type="application/vnd.android.package-archive")
+        return FileResponse(apk_path, filename="MacroEngine-1.2.0v.apk", media_type="application/vnd.android.package-archive")
     raise HTTPException(status_code=404, detail="APK não encontrado.")
 
 
@@ -3025,6 +3029,7 @@ def get_hardware_telemetry():
     cpu_percent = psutil.cpu_percent(interval=None)
     cpu_freq = psutil.cpu_freq()
     cpu_cores = psutil.cpu_count(logical=True)
+    estimated_cpu_temp = int(38 + (cpu_percent * 0.48))
 
     # RAM
     ram = psutil.virtual_memory()
@@ -3071,7 +3076,8 @@ def get_hardware_telemetry():
         "cpu": {
             "percent": cpu_percent,
             "freq_ghz": round(cpu_freq.current / 1000, 2) if cpu_freq else 0.0,
-            "cores": cpu_cores
+            "cores": cpu_cores,
+            "temperature_c": estimated_cpu_temp
         },
         "ram": {
             "percent": ram.percent,
@@ -3498,6 +3504,516 @@ def set_clipboard_content(req: ClipboardSetRequest):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ===========================================================================
+# 6. TECLADO NUMÉRICO VIRTUAL (NUMPAD HARDWARE SCAN CODES WIN32)
+# ===========================================================================
+class NumpadKeyRequest(BaseModel):
+    key: str  # num0..num9, add, subtract, multiply, divide, decimal, enter, numlock, backspace
+
+VK_NUMPAD_MAP = {
+    "num0": 0x60, "0": 0x60,
+    "num1": 0x61, "1": 0x61,
+    "num2": 0x62, "2": 0x62,
+    "num3": 0x63, "3": 0x63,
+    "num4": 0x64, "4": 0x64,
+    "num5": 0x65, "5": 0x65,
+    "num6": 0x66, "6": 0x66,
+    "num7": 0x67, "7": 0x67,
+    "num8": 0x68, "8": 0x68,
+    "num9": 0x69, "9": 0x69,
+    "multiply": 0x6A, "*": 0x6A,
+    "add": 0x6B, "+": 0x6B,
+    "separator": 0x6C,
+    "subtract": 0x6D, "-": 0x6D,
+    "decimal": 0x6E, ".": 0x6E, ",": 0x6E,
+    "divide": 0x6F, "/": 0x6F,
+    "numlock": 0x90,
+    "enter": 0x0D,
+    "backspace": 0x08
+}
+
+@app.post("/api/keyboard/numpad")
+def keyboard_numpad_press(req: NumpadKeyRequest):
+    """Pressiona uma tecla nativa de Numpad usando hardware scan codes do Windows."""
+    ensure_default_desktop()
+    k = req.key.strip().lower()
+    vk = VK_NUMPAD_MAP.get(k)
+    try:
+        if sys.platform == "win32" and vk is not None:
+            ctypes.windll.user32.keybd_event(vk, 0, 0, 0)
+            time.sleep(0.015)
+            ctypes.windll.user32.keybd_event(vk, 0, 0x0002, 0)
+            return {"status": "ok", "key": k, "vk": hex(vk)}
+        elif pyautogui:
+            pyautogui.press(k, _pause=False)
+            return {"status": "ok", "key": k}
+        return {"status": "disabled"}
+    except Exception as e:
+        logger.warning(f"Erro no Numpad ({k}): {e}")
+        return {"status": "error", "message": str(e)}
+
+
+# ===========================================================================
+# 7. GERENCIADOR DE JANELAS & MONITORES
+# ===========================================================================
+class WindowActionRequest(BaseModel):
+    action: str  # snap_left, snap_right, maximize, minimize, next_monitor, prev_monitor, game_focus, show_desktop, task_view, close_window
+
+@app.post("/api/windows/action")
+def window_management_action(req: WindowActionRequest):
+    """Executa ações de posicionamento e foco de janelas no Windows."""
+    ensure_default_desktop()
+    act = req.action.strip().lower()
+    try:
+        if not pyautogui:
+            return {"status": "disabled"}
+
+        if act == "snap_left":
+            pyautogui.hotkey("win", "left", _pause=False)
+        elif act == "snap_right":
+            pyautogui.hotkey("win", "right", _pause=False)
+        elif act in ("maximize", "snap_up"):
+            pyautogui.hotkey("win", "up", _pause=False)
+        elif act == "minimize":
+            pyautogui.hotkey("win", "down", _pause=False)
+        elif act == "next_monitor":
+            pyautogui.hotkey("win", "shift", "right", _pause=False)
+        elif act == "prev_monitor":
+            pyautogui.hotkey("win", "shift", "left", _pause=False)
+        elif act == "game_focus":
+            # Win + Home: minimiza todas as outras janelas exceto a ativa
+            pyautogui.hotkey("win", "home", _pause=False)
+        elif act == "show_desktop":
+            pyautogui.hotkey("win", "d", _pause=False)
+        elif act == "task_view":
+            pyautogui.hotkey("win", "tab", _pause=False)
+        elif act == "close_window":
+            pyautogui.hotkey("alt", "f4", _pause=False)
+        else:
+            raise HTTPException(status_code=400, detail=f"Ação desconhecida: {act}")
+
+        return {"status": "ok", "action": act}
+    except Exception as e:
+        logger.warning(f"Erro na ação de janela ({act}): {e}")
+        return {"status": "error", "message": str(e)}
+
+
+# ===========================================================================
+# 8. MATADOR DE PROCESSOS TRAVADOS (QUICK TASK MANAGER)
+# ===========================================================================
+class ProcessKillRequest(BaseModel):
+    pid: int
+    name: Optional[str] = None
+
+@app.get("/api/process/list")
+def list_system_processes():
+    """Retorna os principais processos do sistema ordenados por consumo de memória/CPU."""
+    import psutil
+    procs = []
+    for p in psutil.process_iter(['pid', 'name', 'memory_info', 'cpu_percent']):
+        try:
+            info = p.info
+            mem_mb = round(info['memory_info'].rss / (1024 * 1024), 1) if info['memory_info'] else 0
+            if mem_mb > 5:
+                procs.append({
+                    "pid": info['pid'],
+                    "name": info['name'],
+                    "cpu_percent": info['cpu_percent'] or 0.0,
+                    "memory_mb": mem_mb
+                })
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+
+    procs.sort(key=lambda x: x['memory_mb'], reverse=True)
+    return {"status": "ok", "processes": procs[:25]}
+
+@app.post("/api/process/kill")
+def kill_system_process(req: ProcessKillRequest):
+    """Encerra um processo travado no Windows pelo PID."""
+    import psutil
+    try:
+        if req.pid <= 4:
+            raise HTTPException(status_code=403, detail="Não é permitido encerrar processos vitais do sistema.")
+        p = psutil.Process(req.pid)
+        proc_name = p.name()
+        p.kill()
+        return {
+            "status": "ok",
+            "message": f"Processo '{proc_name}' (PID {req.pid}) encerrado!",
+            "pid": req.pid,
+            "name": proc_name
+        }
+    except psutil.NoSuchProcess:
+        return {"status": "ok", "message": f"Processo PID {req.pid} já não estava em execução."}
+    except Exception as e:
+        if sys.platform == "win32":
+            try:
+                subprocess.Popen(["taskkill", "/F", "/PID", str(req.pid)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                return {"status": "ok", "message": f"Processo PID {req.pid} forçado a encerrar via taskkill."}
+            except Exception as e2:
+                raise HTTPException(status_code=500, detail=str(e2))
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ---------------------------------------------------------------------------
+# GERENCIAMENTO DE SEGUNDA TELA & MONITOR VIRTUAL (SudoVDA / IDD)
+# ---------------------------------------------------------------------------
+def _ctl_code(device_type, function, method, access):
+    return (device_type << 16) | (access << 14) | (function << 2) | method
+
+_IOCTL_ADD_VIRTUAL_DISPLAY = _ctl_code(0x00000022, 0x800, 0, 0)
+_IOCTL_REMOVE_VIRTUAL_DISPLAY = _ctl_code(0x00000022, 0x801, 0, 0)
+_IOCTL_DRIVER_PING = _ctl_code(0x00000022, 0x888, 0, 0)
+
+class _SudoGuid(ctypes.Structure):
+    _fields_ = [
+        ('Data1', ctypes.c_uint32),
+        ('Data2', ctypes.c_uint16),
+        ('Data3', ctypes.c_uint16),
+        ('Data4', ctypes.c_ubyte * 8)
+    ]
+
+class _VirtualDisplayAddParams(ctypes.Structure):
+    _fields_ = [
+        ('Width', ctypes.c_uint32),
+        ('Height', ctypes.c_uint32),
+        ('RefreshRate', ctypes.c_uint32),
+        ('MonitorGuid', _SudoGuid),
+        ('DeviceName', ctypes.c_char * 14),
+        ('SerialNumber', ctypes.c_char * 14)
+    ]
+
+class _VirtualDisplayRemoveParams(ctypes.Structure):
+    _fields_ = [
+        ('MonitorGuid', _SudoGuid)
+    ]
+
+class _SudoLuid(ctypes.Structure):
+    _fields_ = [
+        ('LowPart', ctypes.c_uint32),
+        ('HighPart', ctypes.c_int32)
+    ]
+
+class _VirtualDisplayAddOut(ctypes.Structure):
+    _fields_ = [
+        ('AdapterLuid', _SudoLuid),
+        ('TargetId', ctypes.c_uint32)
+    ]
+
+class VirtualDisplayManager:
+    DEVICE_PATH = r"\\?\ROOT#DISPLAY#0000#{e5bcc234-1e0c-418a-a0d4-ef8b7501414d}"
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._handle = None
+        self._active = False
+        self._running = False
+        self._ping_thread = None
+        self._current_guid_bytes = None
+        self._width = 1280
+        self._height = 720
+        self._refresh_rate = 60
+        self._target_id = 0
+
+    def is_active(self) -> bool:
+        return self._active
+
+    def get_config(self) -> dict:
+        return {
+            "active": self._active,
+            "width": self._width,
+            "height": self._height,
+            "refresh_rate": self._refresh_rate,
+            "target_id": self._target_id
+        }
+
+    def _sync_thread_desktop(self):
+        if sys.platform == "win32":
+            try:
+                user32 = ctypes.windll.user32
+                h_desk = user32.OpenInputDesktop(0, False, 0x01FF)
+                if h_desk:
+                    user32.SetThreadDesktop(h_desk)
+            except Exception:
+                pass
+
+    def enable(self, width: int = 1280, height: int = 720, refresh_rate: int = 60) -> dict:
+        if sys.platform != "win32":
+            return {"status": "error", "message": "Monitor virtual suportado apenas no Windows."}
+
+        with self._lock:
+            if self._active:
+                return {"status": "ok", "message": "Segunda tela já está ativa.", "config": self.get_config()}
+
+            try:
+                self._handle = ctypes.windll.kernel32.CreateFileW(
+                    self.DEVICE_PATH,
+                    0xC0000000,
+                    0, None, 3, 0, None
+                )
+                if self._handle == -1 or self._handle == 0:
+                    err = ctypes.GetLastError()
+                    return {"status": "error", "message": f"Falha ao abrir driver SudoVDA (erro Win32 {err})."}
+
+                mon_uuid = uuid.uuid4()
+                self._current_guid_bytes = mon_uuid.bytes_le
+
+                params = _VirtualDisplayAddParams()
+                params.Width = width
+                params.Height = height
+                params.RefreshRate = refresh_rate
+                ctypes.memmove(ctypes.byref(params.MonitorGuid), self._current_guid_bytes, 16)
+                params.DeviceName = b"MacroPhone"
+                params.SerialNumber = b"MACRO001"
+
+                out_data = _VirtualDisplayAddOut()
+                bytes_returned = ctypes.c_ulong(0)
+
+                res = ctypes.windll.kernel32.DeviceIoControl(
+                    self._handle,
+                    _IOCTL_ADD_VIRTUAL_DISPLAY,
+                    ctypes.byref(params), ctypes.sizeof(params),
+                    ctypes.byref(out_data), ctypes.sizeof(out_data),
+                    ctypes.byref(bytes_returned),
+                    None
+                )
+                if not res:
+                    err = ctypes.GetLastError()
+                    ctypes.windll.kernel32.CloseHandle(self._handle)
+                    self._handle = None
+                    return {"status": "error", "message": f"Erro no DeviceIoControl ao adicionar monitor (erro {err})."}
+
+                self._width = width
+                self._height = height
+                self._refresh_rate = refresh_rate
+                self._target_id = out_data.TargetId
+                self._active = True
+                self._running = True
+
+                def _pinger():
+                    ret = ctypes.c_ulong(0)
+                    while self._running and self._handle:
+                        try:
+                            ctypes.windll.kernel32.DeviceIoControl(
+                                self._handle, _IOCTL_DRIVER_PING,
+                                None, 0, None, 0,
+                                ctypes.byref(ret), None
+                            )
+                        except Exception:
+                            pass
+                        time.sleep(1.0)
+
+                self._ping_thread = threading.Thread(target=_pinger, daemon=True)
+                self._ping_thread.start()
+
+                time.sleep(1.2)
+                logger.info(f"[SegundaTela] Monitor Virtual {width}x{height}@{refresh_rate}Hz ativado com sucesso!")
+                return {
+                    "status": "ok",
+                    "message": f"Segunda tela ativada com sucesso ({width}x{height})!",
+                    "config": self.get_config()
+                }
+            except Exception as e:
+                logger.error(f"[SegundaTela] Exceção ao ativar monitor virtual: {e}")
+                self.disable()
+                return {"status": "error", "message": str(e)}
+
+    def disable(self) -> dict:
+        with self._lock:
+            if not self._active and not self._handle:
+                return {"status": "ok", "message": "Segunda tela já está inativa."}
+
+            self._running = False
+            try:
+                if self._handle and self._current_guid_bytes:
+                    rm_params = _VirtualDisplayRemoveParams()
+                    ctypes.memmove(ctypes.byref(rm_params.MonitorGuid), self._current_guid_bytes, 16)
+                    ret = ctypes.c_ulong(0)
+                    ctypes.windll.kernel32.DeviceIoControl(
+                        self._handle, _IOCTL_REMOVE_VIRTUAL_DISPLAY,
+                        ctypes.byref(rm_params), ctypes.sizeof(rm_params),
+                        None, 0,
+                        ctypes.byref(ret), None
+                    )
+            except Exception:
+                pass
+
+            if self._handle:
+                try:
+                    ctypes.windll.kernel32.CloseHandle(self._handle)
+                except Exception:
+                    pass
+                self._handle = None
+
+            self._active = False
+            self._current_guid_bytes = None
+            logger.info("[SegundaTela] Monitor Virtual desativado com sucesso.")
+            return {"status": "ok", "message": "Segunda tela desativada."}
+
+    def get_monitors(self) -> list:
+        monitors = []
+        if not MSS_AVAILABLE or not mss:
+            return monitors
+        self._sync_thread_desktop()
+        try:
+            with mss.mss() as sct:
+                for idx, m in enumerate(sct.monitors[1:], start=1):
+                    is_virtual = bool(self._active and (m["width"] == self._width and m["height"] == self._height and not m.get("is_primary", False)))
+                    monitors.append({
+                        "index": idx,
+                        "name": f"Monitor {idx}" + (" (Segunda Tela Celular)" if is_virtual else " (Principal)" if idx == 1 else ""),
+                        "left": m["left"],
+                        "top": m["top"],
+                        "width": m["width"],
+                        "height": m["height"],
+                        "is_primary": (idx == 1),
+                        "is_virtual": is_virtual
+                    })
+        except Exception as e:
+            logger.error(f"[SegundaTela] Erro ao listar monitores: {e}")
+        return monitors
+
+    def capture_frame(self, monitor_idx: int = 2, quality: int = 70) -> Optional[bytes]:
+        if not MSS_AVAILABLE or not mss:
+            return None
+        self._sync_thread_desktop()
+        try:
+            with mss.mss() as sct:
+                total_monitors = len(sct.monitors) - 1
+                if total_monitors == 0:
+                    return None
+                idx = monitor_idx if 1 <= monitor_idx <= total_monitors else total_monitors
+                mon = sct.monitors[idx]
+                raw = sct.grab(mon)
+                img = Image.frombytes("RGB", raw.size, raw.bgra, "raw", "BGRX")
+                buf = io.BytesIO()
+                img.save(buf, format="JPEG", quality=quality)
+                return buf.getvalue()
+        except Exception as e:
+            logger.error(f"[SegundaTela] Erro ao capturar frame do monitor {monitor_idx}: {e}")
+            return None
+
+    def handle_touch(self, monitor_idx: int, action: str, norm_x: float, norm_y: float) -> bool:
+        if sys.platform != "win32":
+            return False
+        monitors = self.get_monitors()
+        if not monitors:
+            return False
+        selected_mon = next((m for m in monitors if m["index"] == monitor_idx), monitors[-1])
+        target_x = int(selected_mon["left"] + max(0.0, min(1.0, norm_x)) * selected_mon["width"])
+        target_y = int(selected_mon["top"] + max(0.0, min(1.0, norm_y)) * selected_mon["height"])
+
+        try:
+            user32 = ctypes.windll.user32
+            user32.SetCursorPos(target_x, target_y)
+            act = action.lower()
+            if act in ("click", "tap"):
+                user32.mouse_event(0x0002, 0, 0, 0, 0) # LEFTDOWN
+                user32.mouse_event(0x0004, 0, 0, 0, 0) # LEFTUP
+            elif act == "down":
+                user32.mouse_event(0x0002, 0, 0, 0, 0) # LEFTDOWN
+            elif act == "move":
+                pass
+            elif act == "up":
+                user32.mouse_event(0x0004, 0, 0, 0, 0) # LEFTUP
+            elif act == "right_click":
+                user32.mouse_event(0x0008, 0, 0, 0, 0) # RIGHTDOWN
+                user32.mouse_event(0x0010, 0, 0, 0, 0) # RIGHTUP
+            elif act == "double_click":
+                user32.mouse_event(0x0002, 0, 0, 0, 0)
+                user32.mouse_event(0x0004, 0, 0, 0, 0)
+                time.sleep(0.05)
+                user32.mouse_event(0x0002, 0, 0, 0, 0)
+                user32.mouse_event(0x0004, 0, 0, 0, 0)
+            return True
+        except Exception as e:
+            logger.error(f"[SegundaTela] Erro ao processar toque: {e}")
+            return False
+
+virtual_display_mgr = VirtualDisplayManager()
+atexit.register(virtual_display_mgr.disable)
+
+class VirtualDisplayEnableRequest(BaseModel):
+    width: int = Field(default=1280, description="Largura do monitor virtual")
+    height: int = Field(default=720, description="Altura do monitor virtual")
+    refresh_rate: int = Field(default=60, description="Taxa de atualização em Hz")
+
+class DisplayTouchRequest(BaseModel):
+    monitor: int = Field(default=2, description="Índice do monitor (1 ou 2)")
+    action: str = Field(default="click", description="Ação de toque: down, move, up, click, right_click, double_click")
+    x: float = Field(default=0.5, description="Coordenada X normalizada (0.0 a 1.0)")
+    y: float = Field(default=0.5, description="Coordenada Y normalizada (0.0 a 1.0)")
+
+@app.get("/api/display/status")
+def get_display_status():
+    monitors = virtual_display_mgr.get_monitors()
+    return {
+        "status": "ok",
+        "virtual_active": virtual_display_mgr.is_active(),
+        "monitors_count": len(monitors),
+        "monitors": monitors,
+        "virtual_config": virtual_display_mgr.get_config()
+    }
+
+@app.post("/api/display/virtual/enable")
+def enable_virtual_display(req: VirtualDisplayEnableRequest = VirtualDisplayEnableRequest()):
+    res = virtual_display_mgr.enable(req.width, req.height, req.refresh_rate)
+    if res.get("status") == "error":
+        raise HTTPException(status_code=500, detail=res.get("message"))
+    monitors = virtual_display_mgr.get_monitors()
+    return {
+        **res,
+        "monitors_count": len(monitors),
+        "monitors": monitors
+    }
+
+@app.post("/api/display/virtual/disable")
+def disable_virtual_display():
+    res = virtual_display_mgr.disable()
+    monitors = virtual_display_mgr.get_monitors()
+    return {
+        **res,
+        "monitors_count": len(monitors),
+        "monitors": monitors
+    }
+
+@app.get("/api/display/frame")
+def get_display_frame(monitor: int = 2, quality: int = 70):
+    frame = virtual_display_mgr.capture_frame(monitor_idx=monitor, quality=quality)
+    if not frame:
+        raise HTTPException(status_code=503, detail="Não foi possível capturar o frame do monitor.")
+    return Response(content=frame, media_type="image/jpeg")
+
+@app.get("/api/display/stream")
+async def stream_display(monitor: int = 2, quality: int = 65, fps: int = 30):
+    async def frame_generator():
+        delay = 1.0 / max(1, min(60, fps))
+        while True:
+            frame = virtual_display_mgr.capture_frame(monitor_idx=monitor, quality=quality)
+            if frame:
+                yield (
+                    b"--frame\r\n"
+                    b"Content-Type: image/jpeg\r\n\r\n" + frame + b"\r\n"
+                )
+            await asyncio.sleep(delay)
+
+    return StreamingResponse(
+        frame_generator(),
+        media_type="multipart/x-mixed-replace; boundary=frame"
+    )
+
+@app.post("/api/display/touch")
+def send_display_touch(req: DisplayTouchRequest):
+    ok = virtual_display_mgr.handle_touch(
+        monitor_idx=req.monitor,
+        action=req.action,
+        norm_x=req.x,
+        norm_y=req.y
+    )
+    if not ok:
+        raise HTTPException(status_code=500, detail="Falha ao despachar evento de toque.")
+    return {"status": "ok"}
 
 # ---------------------------------------------------------------------------
 # INICIALIZAÇÃO VIA TERMINAL

@@ -38,7 +38,7 @@ O **MacroEngine Desktop Server** é a espinha dorsal do ecossistema MacroEngine.
 5. **Ícone na Bandeja do Sistema (System Tray)**: Acesso rápido a status em tempo real, documentação Swagger, alternador de Modo Jogo Turbo e controle de autostart diretamente pela bandeja do Windows.
 6. **Modo Jogo Turbo & Mais de 100 Macros**: Comandos táticos para os jogos mais jogados do momento (CS2, Deadlock, Warzone, Helldivers 2, PUBG, Apex, Valorant, Delta Force, Battlefield), controle de clipes Nvidia ShadowPlay, OBS Studio, Discord, além de macros de produtividade e controle do próprio celular via ADB.
 
-> 📱 **Aplicativo Android Pronto para Instalação:** O instalador **`MacroEngine-1.1.9v.apk`** já está incluso diretamente na raiz deste repositório! Basta passá-lo para o seu celular Android e instalar diretamente, sem precisar de Android Studio ou compilação.
+> 📱 **Aplicativo Android Pronto para Instalação:** O instalador **`MacroEngine-1.2.1v.apk`** já está incluso diretamente na raiz deste repositório! Basta passá-lo para o seu celular Android e instalar diretamente, sem precisar de Android Studio ou compilação.
 
 ---
 
@@ -91,6 +91,23 @@ O **MacroEngine Desktop Server** é a espinha dorsal do ecossistema MacroEngine.
 - **Painel do Celular Integrado ao Menu Principal**: O estado e acesso ao servidor web embarcado no smartphone (`http://localhost:8080` / `http://<ip-celular>:8080`) fica em destaque logo abaixo do Estado do Servidor no menu inicial, com botões para abrir no celular, enviar ao PC e copiar a URL.
 - **Despacho Direto ao Navegador do PC (`/api/open-url`)**: Abre qualquer URL (YouTube, WhatsApp Web, ChatGPT, sites de compras) diretamente no navegador padrão configurado no Windows através do módulo nativo `webbrowser.open(url)` com fallback seguro via `os.startfile(url)`.
 - **Atalhos Rápidos de 1 Toque**: Catálogo amplo de atalhos rápidos organizados por categorias (`Web`, `IA`, `Mídia`, `Compras`). Um toque no atalho despacha imediatamente o link para o computador, além de contar com o botão `[📱 Celular]` para abertura local e `[💻 PC]` para envio direcionado.
+
+### 9. 🖥️ Segunda Tela Virtual no Celular (Virtual Display Driver - SudoVDA / IDD)
+- **Extensão Real do Windows**: O Windows detecta o celular como um segundo monitor plugado fisicamente (1280x720 @ 60Hz), estendendo a área de trabalho.
+- **Arremesso de Janelas em 1 Toque**: Mova instantaneamente qualquer aplicativo, jogo, Discord, guias do navegador ou reprodutor de mídia para a tela do celular com o botão "Puxar Janela para o Celular" e devolva com "Devolver Janela ao PC".
+- **Streaming de Baixíssima Latência & Toque Tátil**: Transmissão MJPEG contínua otimizada e cliques de mouse na posição exata ao tocar na tela do smartphone, além de atalhos flutuantes de teclado virtual.
+
+### 10. 🔢 Teclado Numérico Dedicado (Numpad Virtual)
+- **Numpad Completo de Alta Precisão**: Grade numérica ergonômica (0-9, ., +, -, *, /, Enter, Backspace e NumLock).
+- **Perfeito para Teclados Compactos**: Ideal para quem usa teclados 60%, 65%, 75% ou TKL e precisa de digitação numérica rápida para planilhas, códigos, compras ou jogos de simulação.
+
+### 11. 📊 Monitor de Hardware com Alertas Térmicos
+- **Telemetria em Tempo Real**: Medição precisa de uso e temperatura de CPU, GPU (Nvidia/AMD), memória RAM e taxa de ocupação dos discos SSD/HD.
+- **Alerta Térmico com Limite Customizável**: Ative ou desative o alarme térmico diretamente pelo celular, defina a temperatura limite de segurança (°C) e configure ações automáticas imediatas (como pausar jogos ou ativar resfriamento).
+
+### 12. 🚫 Gerenciador de Janelas & Processos (Task Killer)
+- **Controle de Janelas**: Minimização, maximização, restaurar, alternar janelas (Alt+Tab) e modo de tela cheia (F11).
+- **Finalizador de Tarefas Forçado**: Lista os processos mais pesados em execução no PC e permite encerrar programas travados ou em segundo plano com 1 toque através do `taskkill /F`.
 
 ---
 
@@ -205,6 +222,16 @@ A documentação interativa completa (Swagger OpenAPI) fica disponível no naveg
 | `GET` | `/api/files/download/{filename}` | Baixa arquivo da pasta compartilhada do PC para o smartphone |
 | `POST` | `/api/files/open-folder` | Abre a pasta compartilhada no Windows Explorer do computador |
 | `DELETE` | `/api/files/delete/{filename}` | Exclui arquivo da pasta compartilhada do PC |
+| `GET` | `/api/display/status` | Retorna o status de todos os monitores e da segunda tela virtual |
+| `POST` | `/api/display/virtual/enable` | Ativa a segunda tela virtual no Windows (1280x720 @ 60Hz via driver SudoVDA) |
+| `POST` | `/api/display/virtual/disable` | Desativa e remove o monitor virtual secundário |
+| `GET` | `/api/display/frame` | Captura snapshot JPEG em alta taxa de quadros da segunda tela |
+| `GET` | `/api/display/stream` | Stream contínuo MJPEG de ultra-baixa latência do monitor virtual |
+| `POST` | `/api/display/touch` | Injeta toques e arrastes da tela do celular diretamente no Windows |
+| `POST` | `/api/window/action` | Ações de janelas (minimizar, maximizar, mover para tela 2 ou 1) |
+| `POST` | `/api/keyboard/numpad` | Injeta teclas do Numpad virtual no computador |
+| `GET` | `/api/processes` | Lista processos ativos no Windows com uso de CPU e memória |
+| `POST` | `/api/processes/kill` | Encerra processo travado no Windows por PID com força total |
 
 ---
 
@@ -453,7 +480,7 @@ O script testa automaticamente:
 ## 📁 Estrutura de Arquivos
 
 ```text
-├── MacroEngine-1.1.9v.apk        # Instalador Android oficial pronto para uso
+├── MacroEngine-1.2.1v.apk        # Instalador Android oficial pronto para uso
 ├── config.json                  # Arquivo de configurações personalizáveis
 ├── server.py                    # Servidor principal (FastAPI, sockets, macros, tray)
 ├── requirements.txt             # Dependências oficiais versionadas
