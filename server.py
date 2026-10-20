@@ -16,15 +16,16 @@ import json
 from typing import Optional, Dict, Any, List
 
 # Compatibilidade UTF-8 e proteção para execução em background (pythonw)
+_log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "server_debug.log")
 if sys.platform == "win32":
     if sys.stdout is None:
         try:
-            sys.stdout = open(os.devnull, "w", encoding="utf-8")
+            sys.stdout = open(_log_path, "a", encoding="utf-8")
         except Exception:
             pass
     if sys.stderr is None:
         try:
-            sys.stderr = open(os.devnull, "w", encoding="utf-8")
+            sys.stderr = open(_log_path, "a", encoding="utf-8")
         except Exception:
             pass
     try:
@@ -34,6 +35,21 @@ if sys.platform == "win32":
             sys.stderr.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
         pass
+
+# Impede abertura e fechamento repetitivo de janelas pretas (CMD/conhost) no Windows
+if sys.platform == "win32":
+    _orig_popen_class = subprocess.Popen
+    class _SilentPopen(_orig_popen_class):
+        def __init__(self, *args, **kwargs):
+            if "creationflags" not in kwargs:
+                kwargs["creationflags"] = 0x08000000  # CREATE_NO_WINDOW
+                if "startupinfo" not in kwargs:
+                    si = subprocess.STARTUPINFO()
+                    si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                    si.wShowWindow = 0  # SW_HIDE
+                    kwargs["startupinfo"] = si
+            super().__init__(*args, **kwargs)
+    subprocess.Popen = _SilentPopen
 
 if sys.platform == "win32":
     try:
@@ -1666,7 +1682,7 @@ def _lock_workstation():
 
 def _open_terminal():
     if sys.platform == 'win32':
-        subprocess.Popen(['powershell.exe', '-NoExit'])
+        subprocess.Popen(['powershell.exe', '-NoExit'], creationflags=subprocess.CREATE_NEW_CONSOLE)
         return True
     else:
         subprocess.Popen(['x-terminal-emulator'])
@@ -2679,6 +2695,7 @@ class PhoneScreenCaptureManager:
         self._latest_jpeg: Optional[bytes] = None
         self._frame_id: int = 0
         self._wake_event = threading.Event()
+        self._last_request_time: float = 0.0
         self._running = True
         try:
             adb = get_adb_binary()
@@ -2690,9 +2707,11 @@ class PhoneScreenCaptureManager:
 
     def notify_screen_changed(self):
         """Acorda o worker imediatamente para capturar o novo estado da tela após toque ou macro."""
+        self._last_request_time = time.time()
         self._wake_event.set()
 
     def get_latest_frame(self) -> bytes:
+        self._last_request_time = time.time()
         with self._lock:
             if self._latest_jpeg is not None:
                 return self._latest_jpeg
@@ -2767,19 +2786,25 @@ class PhoneScreenCaptureManager:
 
     def _worker_loop(self):
         while self._running:
-            try:
-                with self._capture_lock:
-                    frame = self._do_capture(quality=55)
-                if frame and len(frame) > 1000:
-                    with self._lock:
-                        self._latest_jpeg = frame
-                        self._frame_id += 1
-            except Exception as e:
-                logger.debug(f"Erro worker phone capture: {e}")
+            # Só captura se houver demanda ativa nos últimos 3 segundos ou sinal explícito
+            now = time.time()
+            if (now - self._last_request_time) < 3.0:
+                try:
+                    with self._capture_lock:
+                        frame = self._do_capture(quality=55)
+                    if frame and len(frame) > 1000:
+                        with self._lock:
+                            self._latest_jpeg = frame
+                            self._frame_id += 1
+                except Exception as e:
+                    logger.debug(f"Erro worker phone capture: {e}")
 
-            # Pequeno intervalo adaptativo: se houver evento de toque, acorda imediatamente!
-            self._wake_event.wait(timeout=0.06)
-            self._wake_event.clear()
+                self._wake_event.wait(timeout=0.08)
+                self._wake_event.clear()
+            else:
+                # Ocioso: aguarda sinal sem ficar executando adb desnecessariamente
+                self._wake_event.wait(timeout=2.0)
+                self._wake_event.clear()
 
 phone_screen_manager = PhoneScreenCaptureManager()
 
