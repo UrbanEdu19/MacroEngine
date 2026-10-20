@@ -1905,6 +1905,213 @@ audio_streamer = AudioStreamer()
 audio_in_receiver = AudioInReceiver()
 
 # ---------------------------------------------------------------------------
+# GERENCIADOR DO CLOUDFLARE TUNNEL (ACESSO REMOTO SEM CONFIGURAÇÃO DE ROTEADOR)
+# ---------------------------------------------------------------------------
+class CloudflareTunnelManager:
+    """Gerencia túneis seguros do Cloudflare via cloudflared.exe."""
+    def __init__(self):
+        self.process: Optional[subprocess.Popen] = None
+        self.url: Optional[str] = None
+        self.is_running: bool = False
+        self.started_at: float = 0
+        self.last_error: Optional[str] = None
+        self.lock = threading.RLock()
+
+    def get_bin_path(self) -> str:
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        local_bin = os.path.join(current_dir, "cloudflared.exe" if sys.platform == "win32" else "cloudflared")
+        if os.path.exists(local_bin):
+            return local_bin
+        return "cloudflared"
+
+    def start(self, port: int = 8000, timeout: float = 12.0) -> Dict[str, Any]:
+        with self.lock:
+            if self.is_running and self.process and self.process.poll() is None:
+                return {
+                    "status": "already_running",
+                    "url": self.url,
+                    "is_running": True,
+                    "started_at": self.started_at
+                }
+
+            self.stop()
+            bin_path = self.get_bin_path()
+            if not os.path.exists(bin_path) and sys.platform == "win32":
+                err_msg = f"Executável cloudflared não encontrado em {bin_path}"
+                logger.error(err_msg)
+                return {
+                    "status": "error",
+                    "message": err_msg,
+                    "is_running": False
+                }
+
+            cmd = [bin_path, "tunnel", "--url", f"http://localhost:{port}"]
+            logger.info(f"Iniciando Cloudflare Quick Tunnel: {' '.join(cmd)}")
+
+            try:
+                kwargs = {
+                    "stdout": subprocess.PIPE,
+                    "stderr": subprocess.PIPE,
+                    "text": True,
+                    "bufsize": 1
+                }
+                if sys.platform == "win32":
+                    kwargs["creationflags"] = 0x08000000
+
+                self.process = subprocess.Popen(cmd, **kwargs)
+                self.started_at = time.time()
+                self.is_running = True
+                self.url = None
+                self.last_error = None
+
+                url_found_event = threading.Event()
+
+                def _monitor_output(proc):
+                    try:
+                        import re
+                        while self.is_running and self.process == proc:
+                            line = proc.stderr.readline()
+                            if not line:
+                                break
+                            clean_line = line.strip()
+                            if "trycloudflare.com" in clean_line:
+                                match = re.search(r"https://[a-zA-Z0-9\-]+\.trycloudflare\.com", clean_line)
+                                if match:
+                                    self.url = match.group(0)
+                                    logger.info(f"Cloudflare Tunnel ativo com URL pública: {self.url}")
+                                    url_found_event.set()
+                                    break
+                    except Exception as e:
+                        logger.error(f"Erro no monitor do cloudflared: {e}")
+                    finally:
+                        if self.process == proc and not self.url:
+                            self.is_running = False
+
+                t = threading.Thread(target=_monitor_output, args=(self.process,), daemon=True)
+                t.start()
+
+                # Aguarda até 8 segundos para capturar a URL antes de responder à chamada
+                url_found_event.wait(timeout=min(8.0, timeout))
+
+                return {
+                    "status": "running" if self.url else "starting",
+                    "url": self.url,
+                    "is_running": self.is_running,
+                    "message": "Túnel Cloudflare iniciado com sucesso!" if self.url else "Túnel iniciando em segundo plano..."
+                }
+
+            except Exception as e:
+                self.is_running = False
+                self.last_error = str(e)
+                logger.error(f"Falha ao iniciar cloudflared: {e}")
+                return {
+                    "status": "error",
+                    "message": str(e),
+                    "is_running": False
+                }
+
+    def stop(self) -> Dict[str, Any]:
+        with self.lock:
+            if self.process:
+                try:
+                    self.process.terminate()
+                    self.process.wait(timeout=2.0)
+                except Exception:
+                    try:
+                        self.process.kill()
+                    except Exception:
+                        pass
+                self.process = None
+            self.is_running = False
+            self.url = None
+            logger.info("Cloudflare Tunnel encerrado.")
+            return {"status": "stopped", "is_running": False}
+
+    def status(self) -> Dict[str, Any]:
+        if self.process and self.process.poll() is not None:
+            self.is_running = False
+            self.url = None
+        return {
+            "is_running": self.is_running and self.url is not None,
+            "url": self.url,
+            "started_at": self.started_at,
+            "uptime": int(time.time() - self.started_at) if self.is_running and self.started_at > 0 else 0
+        }
+
+tunnel_manager = CloudflareTunnelManager()
+atexit.register(tunnel_manager.stop)
+
+# ---------------------------------------------------------------------------
+# LOCALIZADOR E LAUNCHER UNIVERSAL DE JOGOS E APLICATIVOS (WINDOWS/LINUX)
+# ---------------------------------------------------------------------------
+def find_and_launch_game_or_app(target: str) -> bool:
+    """
+    Encontra e executa qualquer jogo ou aplicativo instalado no computador sem restrições.
+    Busca atalhos (.lnk, .url) no Desktop do usuário, Desktop público e Menu Iniciar.
+    Caso não localize atalho, tenta invocar diretamente via subprocess/os.startfile.
+    """
+    t_clean = target.strip().lower()
+    search_dirs = []
+
+    if sys.platform == "win32":
+        try:
+            # Desktop do Usuário
+            search_dirs.append(os.path.join(os.path.expanduser("~"), "Desktop"))
+            # Desktop Público
+            public_desktop = os.environ.get("PUBLIC", r"C:\Users\Public") + r"\Desktop"
+            if os.path.exists(public_desktop):
+                search_dirs.append(public_desktop)
+            # Menu Iniciar do Usuário
+            appdata = os.environ.get("APPDATA", "")
+            if appdata:
+                search_dirs.append(os.path.join(appdata, r"Microsoft\Windows\Start Menu\Programs"))
+            # Menu Iniciar Público
+            progdata = os.environ.get("ProgramData", r"C:\ProgramData")
+            if progdata:
+                search_dirs.append(os.path.join(progdata, r"Microsoft\Windows\Start Menu\Programs"))
+        except Exception as e:
+            logger.warning(f"Erro ao mapear pastas de busca no Windows: {e}")
+
+    # Procura atalhos correspondentes
+    for sdir in search_dirs:
+        if not os.path.exists(sdir):
+            continue
+        try:
+            for root, _, files in os.walk(sdir):
+                for f in files:
+                    lower_f = f.lower()
+                    if lower_f.endswith(".lnk") or lower_f.endswith(".url"):
+                        name_without_ext = os.path.splitext(lower_f)[0]
+                        if t_clean in name_without_ext or name_without_ext in t_clean:
+                            full_path = os.path.join(root, f)
+                            logger.info(f"Atalho correspondente encontrado para '{target}': {full_path}")
+                            try:
+                                os.startfile(full_path)
+                                return True
+                            except Exception as e:
+                                logger.warning(f"Erro ao executar atalho {full_path}: {e}")
+        except Exception:
+            pass
+
+    # Execução direta de fallback
+    try:
+        if sys.platform == "win32":
+            try:
+                os.startfile(target)
+                return True
+            except Exception:
+                pass
+            cmd = f'cmd.exe /c start "" "{target}"'
+            subprocess.Popen(cmd, shell=True)
+            return True
+        else:
+            subprocess.Popen(target, shell=True)
+            return True
+    except Exception as e:
+        logger.error(f"Erro final ao iniciar '{target}': {e}")
+        return False
+
+# ---------------------------------------------------------------------------
 # DETECÇÃO DE MAC DA PLACA FÍSICA PARA WAKE-ON-LAN
 # ---------------------------------------------------------------------------
 def get_primary_mac() -> str:
@@ -1945,6 +2152,7 @@ def get_status():
         local_ip = "127.0.0.1"
 
     primary_mac = get_primary_mac()
+    tun_stat = tunnel_manager.status()
 
     return {
         "status": "online",
@@ -1959,8 +2167,25 @@ def get_status():
         "audio_stream_target": f"{audio_streamer.client_ip}:{audio_streamer.client_port}" if audio_streamer.is_running else None,
         "autostart_enabled": is_windows_autostart_enabled(),
         "game_mode_active": GAME_MODE_ACTIVE,
-        "tray_enabled": _tray_icon is not None
+        "tray_enabled": _tray_icon is not None,
+        "tunnel_active": tun_stat.get("is_running", False),
+        "tunnel_url": tun_stat.get("url")
     }
+
+@app.get("/api/tunnel/status")
+def get_tunnel_status():
+    """Retorna o status em tempo real do túnel Cloudflare."""
+    return tunnel_manager.status()
+
+@app.post("/api/tunnel/start")
+async def start_tunnel():
+    """Inicia o Cloudflare Quick Tunnel apontando para o servidor local."""
+    return await asyncio.to_thread(tunnel_manager.start, 8000)
+
+@app.post("/api/tunnel/stop")
+def stop_tunnel():
+    """Interrompe e encerra o Cloudflare Tunnel."""
+    return tunnel_manager.stop()
 
 @app.get("/api/wol/info")
 def get_wol_info():
@@ -2152,36 +2377,94 @@ def execute_actions(payload: ExecuteActionsRequest):
                 target_lower = target.lower()
                 if not target:
                     res["message"] = "Alvo de inicialização vazio"
-                elif target.startswith("http://") or target.startswith("https://") or target.startswith("steam://"):
+                elif target.startswith("http://") or target.startswith("https://") or target.startswith("steam://") or target.startswith("com.epicgames") or target.startswith("riotclient://"):
                     opened = launch_url_on_desktop(target)
                     res["success"] = opened
                     res["message"] = f"URL despachada: {target}"
-                elif target_lower in ["navegador", "browser", "internet", "google"]:
-                    # Abre navegador padrão ou chrome
-                    opened = launch_url_on_desktop("https://www.google.com")
-                    res["success"] = opened
-                    res["message"] = "Navegador web iniciado"
-                elif target_lower in ["calc", "calculadora"]:
-                    subprocess.Popen(['calc.exe'] if sys.platform == 'win32' else ['gnome-calculator'])
-                    res["success"] = True
-                    res["message"] = "Calculadora iniciada"
-                elif target_lower in ["notepad", "bloco de notas", "bloco"]:
-                    subprocess.Popen(['notepad.exe'] if sys.platform == 'win32' else ['gedit'])
-                    res["success"] = True
-                    res["message"] = "Bloco de Notas iniciado"
                 else:
-                    if sys.platform == "win32":
-                        import win32process
-                        si = win32process.STARTUPINFO()
-                        si.lpDesktop = r"WinSta0\Default"
-                        cmd = f'cmd.exe /c start "" "{target}"'
-                        win32process.CreateProcess(None, cmd, None, None, False, 0x08000000, None, None, si)
+                    # Mapeamento abrangente de jogos populares para protocolo direto
+                    GAMES_MAP = {
+                        # Jogos Steam
+                        "cs2": "steam://rungameid/730",
+                        "counter strike": "steam://rungameid/730",
+                        "counter-strike": "steam://rungameid/730",
+                        "csgo": "steam://rungameid/730",
+                        "cs": "steam://rungameid/730",
+                        "dota": "steam://rungameid/570",
+                        "dota 2": "steam://rungameid/570",
+                        "pubg": "steam://rungameid/578080",
+                        "gta": "steam://rungameid/271590",
+                        "gta v": "steam://rungameid/271590",
+                        "gta 5": "steam://rungameid/271590",
+                        "apex": "steam://rungameid/1172470",
+                        "apex legends": "steam://rungameid/1172470",
+                        "rust": "steam://rungameid/252490",
+                        "rainbow six": "steam://rungameid/359550",
+                        "r6": "steam://rungameid/359550",
+                        "cyberpunk": "steam://rungameid/1091500",
+                        "cyberpunk 2077": "steam://rungameid/1091500",
+                        "elden ring": "steam://rungameid/1245620",
+                        "rocket league": "steam://rungameid/252950",
+                        "warframe": "steam://rungameid/230410",
+                        "tf2": "steam://rungameid/440",
+                        "team fortress": "steam://rungameid/440",
+                        "baldurs gate": "steam://rungameid/1086940",
+                        "bg3": "steam://rungameid/1086940",
+                        "dead by daylight": "steam://rungameid/381210",
+                        "dbd": "steam://rungameid/381210",
+                        "terraria": "steam://rungameid/105600",
+                        "stardew valley": "steam://rungameid/413150",
+                        "palworld": "steam://rungameid/1623730",
+                        "helldivers": "steam://rungameid/553850",
+                        "helldivers 2": "steam://rungameid/553850",
+                        "left 4 dead": "steam://rungameid/550",
+                        "l4d2": "steam://rungameid/550",
+                        "path of exile": "steam://rungameid/238960",
+                        "wallpaper engine": "steam://rungameid/431960",
+                        # Jogos Riot / Epic / Outros
+                        "valorant": "riotclient://launch/live/prod",
+                        "lol": "riotclient://launch/live/prod",
+                        "league of legends": "riotclient://launch/live/prod",
+                        "fortnite": "com.epicgames.launcher://apps/Fortnite?action=launch&silent=true",
+                        "roblox": "roblox://",
+                        "minecraft": "minecraft://",
+                        "steam": "steam://open/main",
+                        "epic": "com.epicgames.launcher://",
+                        "epic games": "com.epicgames.launcher://",
+                        "battle net": "battlenet://",
+                        "battlenet": "battlenet://",
+                        "discord": "discord://",
+                        "spotify": "spotify:"
+                    }
+
+                    matched_uri = None
+                    for k, uri in GAMES_MAP.items():
+                        if target_lower == k or target_lower.startswith(k + " ") or (" " + k) in target_lower:
+                            matched_uri = uri
+                            break
+
+                    if matched_uri:
+                        opened = launch_url_on_desktop(matched_uri)
+                        res["success"] = opened
+                        res["message"] = f"Jogo/Serviço iniciado: {target} ({matched_uri})"
+                    elif target_lower in ["navegador", "browser", "internet", "google"]:
+                        # Abre navegador padrão ou chrome
+                        opened = launch_url_on_desktop("https://www.google.com")
+                        res["success"] = opened
+                        res["message"] = "Navegador web iniciado"
+                    elif target_lower in ["calc", "calculadora"]:
+                        subprocess.Popen(['calc.exe'] if sys.platform == 'win32' else ['gnome-calculator'])
                         res["success"] = True
-                        res["message"] = f"Aplicativo iniciado: {target}"
+                        res["message"] = "Calculadora iniciada"
+                    elif target_lower in ["notepad", "bloco de notas", "bloco"]:
+                        subprocess.Popen(['notepad.exe'] if sys.platform == 'win32' else ['gedit'])
+                        res["success"] = True
+                        res["message"] = "Bloco de Notas iniciado"
                     else:
-                        subprocess.Popen(target, shell=True)
-                        res["success"] = True
-                        res["message"] = f"Aplicativo iniciado: {target}"
+                        # Busca universal em atalhos do Desktop, Menu Iniciar e PATH
+                        launched = find_and_launch_game_or_app(target)
+                        res["success"] = launched
+                        res["message"] = f"Aplicativo/Jogo despachado: {target}" if launched else f"Tentativa de iniciar '{target}' finalizada."
 
             elif act == "kill":
                 target = item.target.strip()

@@ -38,7 +38,7 @@ O **MacroEngine Desktop Server** é a espinha dorsal do ecossistema MacroEngine.
 5. **Ícone na Bandeja do Sistema (System Tray)**: Acesso rápido a status em tempo real, documentação Swagger, alternador de Modo Jogo Turbo e controle de autostart diretamente pela bandeja do Windows.
 6. **Modo Jogo Turbo & Mais de 100 Macros**: Comandos táticos para os jogos mais jogados do momento (CS2, Deadlock, Warzone, Helldivers 2, PUBG, Apex, Valorant, Delta Force, Battlefield), controle de clipes Nvidia ShadowPlay, OBS Studio, Discord, além de macros de produtividade e controle do próprio celular via ADB.
 
-> 📱 **Aplicativos Android Prontos para Instalação:** Os instaladores oficiais **`MacroEngine-1.2.1v.apk`** (versão mais recente com Segunda Tela Virtual e Numpad) e **`MacroEngine-1.1.9v.apk`** (versão anterior preservada) já estão inclusos diretamente na raiz deste repositório e na seção [Releases](https://github.com/UrbanEdu19/MacroEngine/releases)! Basta passá-los para o seu smartphone Android e instalar diretamente, sem precisar de Android Studio ou compilação.
+> 📱 **Aplicativos Android Prontos para Instalação:** Os instaladores oficiais **`MacroEngine-1.2.2v.apk`** (versão mais recente com Cloudflare Quick Tunnel, Multi-IA Online e Launcher de Jogos), **`MacroEngine-1.2.1v.apk`** e **`MacroEngine-1.1.9v.apk`** (versões anteriores preservadas) já estão inclusos diretamente na raiz deste repositório e na seção [Releases](https://github.com/UrbanEdu19/MacroEngine/releases)! Basta passá-los para o seu smartphone Android e instalar diretamente, sem precisar de Android Studio ou compilação.
 
 ---
 
@@ -108,6 +108,26 @@ O **MacroEngine Desktop Server** é a espinha dorsal do ecossistema MacroEngine.
 ### 12. 🚫 Gerenciador de Janelas & Processos (Task Killer)
 - **Controle de Janelas**: Minimização, maximização, restaurar, alternar janelas (Alt+Tab) e modo de tela cheia (F11).
 - **Finalizador de Tarefas Forçado**: Lista os processos mais pesados em execução no PC e permite encerrar programas travados ou em segundo plano com 1 toque através do `taskkill /F`.
+
+### 13. 🌐 Acesso Remoto Global via Cloudflare Quick Tunnel (Sem Abrir Portas)
+- **Conecte-se de Qualquer Rede (4G/5G ou Fora de Casa)**: Utiliza a tecnologia **Cloudflare Quick Tunnel** integrada diretamente ao servidor desktop (`cloudflared`).
+- **Zero Configuração de Roteador**: Não requer IP estático, DDNS, redirecionamento de portas (port forwarding) ou criação de conta.
+- **Link HTTPS Seguro e Criptografado**: O servidor gera automaticamente uma URL pública temporária `https://*.trycloudflare.com` que pode ser iniciada, pausada ou copiada diretamente pelo menu de Configurações do app no celular.
+
+### 14. 🤖 Assistente de IA Online (APIs em Nuvem) & On-Device (Gemma 2B)
+- **Suporte aos Principais Provedores de IA do Mundo**: Integração direta com **Google Gemini** (Gemini 1.5 Flash / Pro, Gemini 2.0), **OpenAI** (GPT-4o, GPT-4o-mini), **Groq** (Llama 3.3 70B com resposta em milissegundos), **Anthropic Claude** (Claude 3.5 Haiku / Sonnet) e **OpenRouter**.
+- **Comandos Universais Sem Restrições**: A IA aceita qualquer pedido do usuário e executa no computador:
+  - **Jogos Populares**: Abrir CS2, League of Legends, Valorant, GTA 5, Dota 2, Roblox, Minecraft, Fortnite, PUBG, Apex Legends, Elden Ring, Baldur's Gate 3, etc.
+  - **Aplicativos & Mídia**: Spotify, Discord, Chrome, VS Code, calculadora, reproduzir/pausar faixas, ajuste de volume e mutar.
+  - **Sistema & Janelas**: Minimizar tudo, tirar printscreen, fechar programas e bloquear o Windows.
+- **Launcher Inteligente no Windows**: Se o jogo ou aplicativo não tiver atalho padrão, o servidor faz uma busca automática e profunda em atalhos do Desktop e Menu Iniciar para executar o programa correto sem falhas.
+
+### 15. ⚙️ Central Unificada de Configurações & Controle de Sessão
+- **Interface Reestruturada em Abas Intuitivas**:
+  - 🌐 **Conexão**: Alternância instantânea entre Wi-Fi Local e Cloudflare Tunnel Remoto, scanner de rede e teste de latência em tempo real.
+  - 🤖 **IA & APIs**: Alternador entre IA Online e IA Local Offline, seletor de provedor, campo seguro de Chave de API, escolha de modelo e botão de teste de conexão.
+  - ⚙️ **Sistema & Alertas**: Alerta térmico com slider de temperatura (°C) e personalização de portas.
+  - 🚪 **Sessão & Sair**: Botões para desconectar, encerrar o servidor no computador remotamente e sair do aplicativo.
 
 ---
 
