@@ -38,7 +38,7 @@ O **MacroEngine Desktop Server** é a espinha dorsal do ecossistema MacroEngine.
 5. **Ícone na Bandeja do Sistema (System Tray)**: Acesso rápido a status em tempo real, documentação Swagger, alternador de Modo Jogo Turbo e controle de autostart diretamente pela bandeja do Windows.
 6. **Modo Jogo Turbo & Mais de 100 Macros**: Comandos táticos para os jogos mais jogados do momento (CS2, Deadlock, Warzone, Helldivers 2, PUBG, Apex, Valorant, Delta Force, Battlefield), controle de clipes Nvidia ShadowPlay, OBS Studio, Discord, além de macros de produtividade e controle do próprio celular via ADB.
 
-> 📱 **Aplicativos Android Prontos para Instalação:** Os instaladores oficiais **`MacroEngine-1.2.2v.apk`** (versão mais recente com Cloudflare Quick Tunnel, Multi-IA Online e Launcher de Jogos), **`MacroEngine-1.2.1v.apk`** e **`MacroEngine-1.1.9v.apk`** (versões anteriores preservadas) já estão inclusos diretamente na raiz deste repositório e na seção [Releases](https://github.com/UrbanEdu19/MacroEngine/releases)! Basta passá-los para o seu smartphone Android e instalar diretamente, sem precisar de Android Studio ou compilação.
+> 📱 **Aplicativos Android Prontos para Instalação:** Os instaladores oficiais **`MacroEngine-1.2.3v.apk`** (versão mais recente com Multi-Idiomas Global i18n, Auto-Descoberta UDP Beacon e Notificações Windows HUD), **`MacroEngine-1.2.2v.apk`**, **`MacroEngine-1.2.1v.apk`** e **`MacroEngine-1.1.9v.apk`** (versões anteriores preservadas) já estão inclusos diretamente na raiz deste repositório e na seção [Releases](https://github.com/UrbanEdu19/MacroEngine/releases)! Basta passá-los para o seu smartphone Android e instalar diretamente, sem precisar de Android Studio ou compilação.
 
 ---
 
@@ -128,6 +128,18 @@ O **MacroEngine Desktop Server** é a espinha dorsal do ecossistema MacroEngine.
   - 🤖 **IA & APIs**: Alternador entre IA Online e IA Local Offline, seletor de provedor, campo seguro de Chave de API, escolha de modelo e botão de teste de conexão.
   - ⚙️ **Sistema & Alertas**: Alerta térmico com slider de temperatura (°C) e personalização de portas.
   - 🚪 **Sessão & Sair**: Botões para desconectar, encerrar o servidor no computador remotamente e sair do aplicativo.
+
+### 16. 🌍 Suporte a Multi-Idiomas (i18n Global)
+- **9 Idiomas Internacionais Nativos**: Português (Brasil) 🇧🇷, English (US) 🇺🇸, Español 🇪🇸, Français 🇫🇷, Deutsch 🇩🇪, Italiano 🇮🇹, Русский 🇷🇺, 日本語 🇯🇵 e 简体中文 🇨🇳.
+- **Troca Dinâmica em Tempo Real**: Selecione o idioma desejado na nova aba **Idioma** em Configurações; a interface inteira do aplicativo (telas, cards, badges de status, placeholders de pesquisa e alertas) atualiza instantaneamente sem necessidade de reiniciar.
+
+### 17. 📡 Auto-Descoberta Ultrarrápida (UDP Beacon) & Conexão USB Direta
+- **Descoberta em Milissegundos (<50ms)**: O servidor emite e responde a pacotes UDP Broadcast na porta 8001 (`MACROENGINE_DISCOVER`), permitindo ao aplicativo móvel detectar o computador instantaneamente na rede local Wi-Fi, sem necessidade de digitar IP manual.
+- **Detecção de Conexão USB Direta**: Reconhece automaticamente conexões de cabo via ADB Reverse (`127.0.0.1:8000`), exibindo o indicador de status "USB Direto" no painel.
+
+### 18. 💬 Notificações Nativas no Monitor (Windows HUD / Toast OSD)
+- **Envio de Mensagens para o Monitor**: Pelo aplicativo móvel (aba Área de Transferência / Clipboard), você pode digitar qualquer texto e clicar em **"EXIBIR NOTIFICAÇÃO NO MONITOR (HUD)"**.
+- **Toast OSD sem Dependências**: O servidor despacha a notificação nativa do Windows 10/11 através do endpoint `POST /api/notify`, exibindo o popup no canto inferior direito da tela do PC mesmo com jogos ou vídeos em execução.
 
 ---
 
@@ -252,6 +264,7 @@ A documentação interativa completa (Swagger OpenAPI) fica disponível no naveg
 | `POST` | `/api/keyboard/numpad` | Injeta teclas do Numpad virtual no computador |
 | `GET` | `/api/processes` | Lista processos ativos no Windows com uso de CPU e memória |
 | `POST` | `/api/processes/kill` | Encerra processo travado no Windows por PID com força total |
+| `POST` | `/api/notify` | Dispara notificação nativa (HUD/Toast) no monitor do Windows |
 
 ---
 
@@ -500,8 +513,12 @@ O script testa automaticamente:
 ## 📁 Estrutura de Arquivos
 
 ```text
+├── MacroEngine-1.2.3v.apk        # Instalador Android oficial v1.2.3v (Multi-Idiomas, UDP Beacon, Windows HUD)
+├── MacroEngine-1.2.2v.apk        # Instalador Android oficial v1.2.2v (Cloudflare Tunnel, Multi-IA, Launcher)
 ├── MacroEngine-1.2.1v.apk        # Instalador Android oficial v1.2.1v (Segunda Tela, Numpad, Hardware)
 ├── MacroEngine-1.1.9v.apk        # Instalador Android oficial v1.1.9v (Versão estável anterior)
+├── cloudflared.exe               # Binário oficial Cloudflare Tunnel para conexões remotas seguras
+├── testar_tunnel_manual.bat      # Script interativo para inspeção e teste do Cloudflare Quick Tunnel
 ├── config.json                  # Arquivo de configurações personalizáveis
 ├── server.py                    # Servidor principal (FastAPI, sockets, macros, tray)
 ├── requirements.txt             # Dependências oficiais versionadas

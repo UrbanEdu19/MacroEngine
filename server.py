@@ -4326,6 +4326,142 @@ def send_display_touch(req: DisplayTouchRequest):
 # ---------------------------------------------------------------------------
 # INICIALIZAÇÃO VIA TERMINAL
 # ---------------------------------------------------------------------------
+
+# ==============================================================================
+# SISTEMA DE NOTIFICAÇÕES WINDOWS NATIVAS (HUD / TOAST) & UDP AUTO-DISCOVERY
+# ==============================================================================
+
+def show_windows_toast(title: str, message: str) -> bool:
+    """
+    Exibe uma notificação nativa do Windows 10/11 na área de trabalho sem bibliotecas extras.
+    """
+    try:
+        safe_title = title.replace('"', '`"').replace('$', '`$').replace('\n', ' ')
+        safe_msg = message.replace('"', '`"').replace('$', '`$').replace('\n', ' ')
+        ps_script = f"""
+        [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
+        $template = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02)
+        $textNodes = $template.GetElementsByTagName("text")
+        $textNodes.Item(0).AppendChild($template.CreateTextNode("{safe_title}")) | Out-Null
+        $textNodes.Item(1).AppendChild($template.CreateTextNode("{safe_msg}")) | Out-Null
+        $toast = [Windows.UI.Notifications.ToastNotification]::new($template)
+        [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("MacroEngine").Show($toast)
+        """
+        subprocess.Popen(
+            ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", ps_script],
+            creationflags=0x08000000
+        )
+        return True
+    except Exception as e:
+        logger.error(f"Erro ao disparar Toast Windows: {e}")
+        return False
+
+class UdpDiscoveryBeacon:
+    """
+    Serviço de Auto-Descoberta mDNS/Zeroconf via UDP Broadcast.
+    Responde imediatamente a 'MACROENGINE_DISCOVER' e transmite beacons periódicos na porta 8001.
+    """
+    def __init__(self, port: int = 8000, beacon_port: int = 8001):
+        self.server_port = port
+        self.beacon_port = beacon_port
+        self.running = False
+        self._thread = None
+        self._broadcast_thread = None
+
+    def start(self):
+        if self.running:
+            return
+        self.running = True
+        self._thread = threading.Thread(target=self._listen_loop, daemon=True, name="UdpDiscoveryListener")
+        self._thread.start()
+        self._broadcast_thread = threading.Thread(target=self._broadcast_loop, daemon=True, name="UdpDiscoveryBroadcaster")
+        self._broadcast_thread.start()
+        logger.info(f"Auto-Descoberta UDP ativa na porta {self.beacon_port}")
+
+    def _get_local_ip(self) -> str:
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
+            return ip
+        except Exception:
+            return "127.0.0.1"
+
+    def _listen_loop(self):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.bind(("", self.beacon_port))
+            sock.settimeout(1.0)
+            while self.running:
+                try:
+                    data, addr = sock.recvfrom(1024)
+                    msg = data.decode("utf-8", errors="ignore")
+                    if "MACROENGINE_DISCOVER" in msg:
+                        response = {
+                            "type": "MACROENGINE_BEACON",
+                            "hostname": socket.gethostname(),
+                            "ip": self._get_local_ip(),
+                            "port": self.server_port,
+                            "version": "1.2.3v"
+                        }
+                        sock.sendto(json.dumps(response).encode("utf-8"), addr)
+                except socket.timeout:
+                    continue
+                except Exception as e:
+                    if self.running:
+                        logger.debug(f"Erro no listener UDP beacon: {e}")
+                    time.sleep(0.5)
+        except Exception as e:
+            logger.error(f"Não foi possível abrir porta UDP beacon {self.beacon_port}: {e}")
+        finally:
+            sock.close()
+
+    def _broadcast_loop(self):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+            while self.running:
+                try:
+                    payload = {
+                        "type": "MACROENGINE_BEACON",
+                        "hostname": socket.gethostname(),
+                        "ip": self._get_local_ip(),
+                        "port": self.server_port,
+                        "version": "1.2.3v"
+                    }
+                    data = json.dumps(payload).encode("utf-8")
+                    sock.sendto(data, ("255.255.255.255", self.beacon_port))
+                except Exception:
+                    pass
+                time.sleep(4.0)
+        finally:
+            sock.close()
+
+_global_discovery_beacon = None
+
+def start_udp_discovery_beacon(port: int = 8000):
+    global _global_discovery_beacon
+    if _global_discovery_beacon is None:
+        _global_discovery_beacon = UdpDiscoveryBeacon(port=port)
+        _global_discovery_beacon.start()
+
+class NotifyRequest(BaseModel):
+    title: str = "MacroEngine"
+    message: str
+    duration: int = 5
+
+@app.post("/api/notify")
+def api_notify_windows(payload: NotifyRequest):
+    """
+    Dispara uma notificação nativa na tela do Windows do computador.
+    """
+    success = show_windows_toast(payload.title, payload.message)
+    return {"status": "ok" if success else "error", "title": payload.title, "message": payload.message}
+
+
+
 if __name__ == "__main__":
     # Garante estritamente apenas UMA instância do servidor no PC
     ensure_single_instance()
@@ -4340,6 +4476,9 @@ if __name__ == "__main__":
     port = SERVER_CONFIG.get("server", {}).get("port", 8000)
     log_level = SERVER_CONFIG.get("server", {}).get("log_level", "info")
     autostart_active = is_windows_autostart_enabled()
+
+    # Inicia serviço de Auto-Descoberta UDP para o celular encontrar o PC na hora
+    start_udp_discovery_beacon(port=port)
 
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
