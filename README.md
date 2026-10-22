@@ -557,7 +557,7 @@ Se o **MacroEngine** te ajudou ou foi útil no seu dia a dia e você deseja ince
 
 ### 💠 Chave PIX:
 ```text
-41998205303
+3f1717b3-a511-4dd1-b1f6-82646367f03c
 ```
 *Muito obrigado pelo apoio à evolução da ferramenta!* 🚀
 
