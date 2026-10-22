@@ -38,7 +38,7 @@ O **MacroEngine Desktop Server** é a espinha dorsal do ecossistema MacroEngine.
 5. **Ícone na Bandeja do Sistema (System Tray)**: Acesso rápido a status em tempo real, documentação Swagger, alternador de Modo Jogo Turbo e controle de autostart diretamente pela bandeja do Windows.
 6. **Modo Jogo Turbo & Mais de 100 Macros**: Comandos táticos para os jogos mais jogados do momento (CS2, Deadlock, Warzone, Helldivers 2, PUBG, Apex, Valorant, Delta Force, Battlefield), controle de clipes Nvidia ShadowPlay, OBS Studio, Discord, além de macros de produtividade e controle do próprio celular via ADB.
 
-> 📱 **Aplicativos Android Prontos para Instalação:** Os instaladores oficiais **`MacroEngine-1.2.3v.apk`** (versão mais recente com Multi-Idiomas Global i18n, Auto-Descoberta UDP Beacon e Notificações Windows HUD), **`MacroEngine-1.2.2v.apk`**, **`MacroEngine-1.2.1v.apk`** e **`MacroEngine-1.1.9v.apk`** (versões anteriores preservadas) já estão inclusos diretamente na raiz deste repositório e na seção [Releases](https://github.com/UrbanEdu19/MacroEngine/releases)! Basta passá-los para o seu smartphone Android e instalar diretamente, sem precisar de Android Studio ou compilação.
+> 📱 **Aplicativos Android Prontos para Instalação:** Os instaladores oficiais **`MacroEngine-1.2.4v.apk`** (versão mais recente com Backup & Restauração Integral Persistente, Adicionar & Pinar Sites no Lançador de Links, Multi-Idiomas Global i18n, Auto-Descoberta UDP Beacon e Notificações Windows HUD), **`MacroEngine-1.2.3v.apk`**, **`MacroEngine-1.2.2v.apk`**, **`MacroEngine-1.2.1v.apk`** e **`MacroEngine-1.1.9v.apk`** (versões anteriores preservadas) já estão inclusos diretamente na raiz deste repositório e na seção [Releases](https://github.com/UrbanEdu19/MacroEngine/releases)! Basta passá-los para o seu smartphone Android e instalar diretamente, sem precisar de Android Studio ou compilação.
 
 ---
 
@@ -88,9 +88,12 @@ O **MacroEngine Desktop Server** é a espinha dorsal do ecossistema MacroEngine.
 - **Abertura Remota da Pasta no Explorer**: Com 1 toque no app mobile (`/api/files/open-folder`), o servidor abre a pasta compartilhada no Explorador de Arquivos do Windows na tela do PC.
 
 ### 8. 🌐 Lançador de Links Inteligente & Painel Web do Celular
+- **Adição e Salvamento de Sites Personalizados**: Adicione qualquer site ou atalho customizado com título, URL (com preenchimento automático inteligente ou botão de colar da área de transferência) e categorização temática em chips (`Web`, `IA`, `Mídia`, `Compras`, `Jogos`, `Outros`).
+- **Fixação no Topo (Pin 📌)**: Fixe sites favoritos no topo da lista. Itens pinados ganham borda e ícone em destaque visual Electric Amber (`#FFB300`), além de uma seção dedicada no topo: `SITES FIXADOS / PINADOS NO TOPO`.
+- **Filtros Rápidos e Gestão Completa**: Filtre por categorias, incluindo chips dedicados `📌 Fixados` e `⭐ Meus Sites`, com exclusão facilitada e confirmação para atalhos customizados.
 - **Painel do Celular Integrado ao Menu Principal**: O estado e acesso ao servidor web embarcado no smartphone (`http://localhost:8080` / `http://<ip-celular>:8080`) fica em destaque logo abaixo do Estado do Servidor no menu inicial, com botões para abrir no celular, enviar ao PC e copiar a URL.
-- **Despacho Direto ao Navegador do PC (`/api/open-url`)**: Abre qualquer URL (YouTube, WhatsApp Web, ChatGPT, sites de compras) diretamente no navegador padrão configurado no Windows através do módulo nativo `webbrowser.open(url)` com fallback seguro via `os.startfile(url)`.
-- **Atalhos Rápidos de 1 Toque**: Catálogo amplo de atalhos rápidos organizados por categorias (`Web`, `IA`, `Mídia`, `Compras`). Um toque no atalho despacha imediatamente o link para o computador, além de contar com o botão `[📱 Celular]` para abertura local e `[💻 PC]` para envio direcionado.
+- **Despacho Direto ao Navegador do PC (`/api/open-url`)**: Abre qualquer URL (YouTube, WhatsApp Web, ChatGPT, Twitch, sites de compras) diretamente no navegador padrão configurado no Windows através do módulo nativo `webbrowser.open(url)` com fallback seguro via `os.startfile(url)`.
+- **Atalhos Rápidos de 1 Toque**: Catálogo amplo de atalhos rápidos organizados por categorias (`Web`, `IA`, `Mídia`, `Compras`, `Jogos`). Um toque no atalho despacha imediatamente o link para o computador, além de contar com o botão `[📱 Celular]` para abertura local e `[💻 PC]` para envio direcionado.
 
 ### 9. 🖥️ Segunda Tela Virtual no Celular (Virtual Display Driver - SudoVDA / IDD)
 - **Extensão Real do Windows**: O Windows detecta o celular como um segundo monitor plugado fisicamente (1280x720 @ 60Hz), estendendo a área de trabalho.
@@ -140,6 +143,12 @@ O **MacroEngine Desktop Server** é a espinha dorsal do ecossistema MacroEngine.
 ### 18. 💬 Notificações Nativas no Monitor (Windows HUD / Toast OSD)
 - **Envio de Mensagens para o Monitor**: Pelo aplicativo móvel (aba Área de Transferência / Clipboard), você pode digitar qualquer texto e clicar em **"EXIBIR NOTIFICAÇÃO NO MONITOR (HUD)"**.
 - **Toast OSD sem Dependências**: O servidor despacha a notificação nativa do Windows 10/11 através do endpoint `POST /api/notify`, exibindo o popup no canto inferior direito da tela do PC mesmo com jogos ou vídeos em execução.
+
+### 19. 💾 Sistema Integral de Backup & Restauração (Exportação Externa Persistente)
+- **Backup Completo de Tudo do App**: Salva todos os dados e preferências do usuário em um único arquivo estruturado (`.json`), incluindo atalhos e links salvos, URLs pinadas/fixadas, macros customizadas, macros favoritas, configurações de rede (IP, porta, endereço MAC, porta de áudio UDP), modo de conexão (Local vs Remoto Cloudflare), URL do túnel, configurações e chaves de IA (Gemini, OpenAI, Claude, Groq, OpenRouter e Gemma 2B Local), limites térmicos do hardware e idioma selecionado.
+- **Sobrevivência à Desinstalação do APK**: O backup principal é exportado diretamente para a pasta pública `Downloads/MacroEngine_Backups/` via MediaStore/File API. Mesmo que o usuário desinstale o APK ou limpe os dados do aplicativo, todos os seus dados e configurações permanecem 100% preservados na memória do smartphone.
+- **Salvar Como & Compartilhamento Instantâneo**: Suporte ao Storage Access Framework (SAF) para salvar onde quiser (Google Drive, Cartão MicroSD ou pastas internas) e compartilhamento rápido via `FileProvider` (`content://`) direto para WhatsApp, Telegram, E-mail ou nuvem.
+- **Restauração em 1 Toque**: Aba dedicada `Backup` dentro de Configurações lista automaticamente todos os backups detectados no aparelho com carimbo de data/hora, exibindo pré-visualização completa antes da restauração e permitindo restaurar absolutamente tudo com um único clique.
 
 ---
 
@@ -513,6 +522,7 @@ O script testa automaticamente:
 ## 📁 Estrutura de Arquivos
 
 ```text
+├── MacroEngine-1.2.4v.apk        # Instalador Android oficial v1.2.4v (Backup Integral Externo, Adicionar/Pinar Sites)
 ├── MacroEngine-1.2.3v.apk        # Instalador Android oficial v1.2.3v (Multi-Idiomas, UDP Beacon, Windows HUD)
 ├── MacroEngine-1.2.2v.apk        # Instalador Android oficial v1.2.2v (Cloudflare Tunnel, Multi-IA, Launcher)
 ├── MacroEngine-1.2.1v.apk        # Instalador Android oficial v1.2.1v (Segunda Tela, Numpad, Hardware)
