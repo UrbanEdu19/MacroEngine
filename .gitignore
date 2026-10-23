@@ -52,7 +52,15 @@ Thumbs.db
 Desktop.ini
 .DS_Store
 
-# Temporários
+# Binários pesados
+cloudflared.exe
+*.exe
+*.apk
+!MacroEngine-*.apk
+*.aab
+
+# Temporários e códigos dinâmicos
+SEU_CODIGO_DE_PAREAMENTO.txt
 *.tmp
 *.bak
 push_to_github.bat

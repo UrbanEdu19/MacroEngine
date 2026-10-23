@@ -13,6 +13,8 @@ import platform
 import subprocess
 import webbrowser
 import json
+import psutil
+from datetime import datetime
 from typing import Optional, Dict, Any, List
 
 # Compatibilidade UTF-8 e proteção para execução em background (pythonw)
@@ -80,7 +82,7 @@ except ImportError:
 
 from PIL import Image, ImageDraw, ImageFont, ImageGrab
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Response, UploadFile, File, Request
-from fastapi.responses import StreamingResponse, FileResponse
+from fastapi.responses import StreamingResponse, FileResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -128,6 +130,11 @@ DEFAULT_CONFIG = {
         "log_level": "info",
         "enable_tray_icon": True
     },
+    "security": {
+        "require_auth": True,
+        "pin": "123456",
+        "auth_token": ""
+    },
     "screen_capture": {
         "fps": 30,
         "quality": 75,
@@ -150,25 +157,116 @@ DEFAULT_CONFIG = {
     }
 }
 
+def generate_random_pin() -> str:
+    """Gera um PIN criptograficamente seguro e aleatório de 6 dígitos numéricos (100000 - 999999)."""
+    import secrets
+    return f"{secrets.randbelow(900000) + 100000}"
+
 def load_config() -> dict:
+    import secrets
+    cfg = DEFAULT_CONFIG.copy()
     if os.path.exists(CONFIG_PATH):
         try:
             with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-                return json.load(f)
+                loaded = json.load(f)
+                for k, v in loaded.items():
+                    if isinstance(v, dict) and k in cfg:
+                        cfg[k].update(v)
+                    else:
+                        cfg[k] = v
         except Exception as e:
             logger.error(f"Erro ao carregar {CONFIG_PATH}: {e}")
-    return DEFAULT_CONFIG.copy()
+
+    # Garante inicialização e persistência de segurança (PIN aleatório e Token)
+    if "security" not in cfg or not isinstance(cfg["security"], dict):
+        cfg["security"] = {}
+    sec = cfg["security"]
+    if "require_auth" not in sec:
+        sec["require_auth"] = True
+
+    # Se o PIN for o antigo fixo "123456" ou vazio, gera um PIN aleatório forte
+    pin_val = str(sec.get("pin", "")).strip()
+    if not pin_val or pin_val == "123456":
+        sec["pin"] = generate_random_pin()
+
+    if not sec.get("auth_token"):
+        sec["auth_token"] = secrets.token_hex(24)
+
+    if "paired_devices" not in sec or not isinstance(sec["paired_devices"], list):
+        sec["paired_devices"] = []
+
+    save_config(cfg)
+    return cfg
+
+def update_pin_text_file(pin: str, paired_devices: list = None):
+    """Cria e atualiza o arquivo SEU_CODIGO_DE_PAREAMENTO.txt na pasta do servidor."""
+    try:
+        txt_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "SEU_CODIGO_DE_PAREAMENTO.txt")
+        paired_info = ""
+        if paired_devices:
+            paired_info = "\n  DISPOSITIVOS AUTORIZADOS SALVOS NO PC:\n"
+            for dev in paired_devices:
+                name = dev.get("device_name", "Celular Android")
+                dt = dev.get("paired_at", "")
+                paired_info += f"  - [OK] {name} (Pareado em: {dt}) -> ACESSO PERMANENTE ATIVO\n"
+        else:
+            paired_info = "\n  Nenhum celular pareado ainda. Aguardando primeira conexao.\n"
+
+        content = f"""========================================================================
+  MACROENGINE DESKTOP - SEU CODIGO DE PAREAMENTO DO CELULAR
+========================================================================
+
+  CHAVE PIN ATUAL (ALEATORIO):  {pin}
+{paired_info}
+  COMO CONECTAR O SEU CELULAR AO PC:
+  1. Abra o aplicativo MacroEngine no celular.
+  2. Toque no icone de Engrenagem (Configuracoes) no topo.
+  3. Na primeira aba (Rede), veja a secao PAREAMENTO & SEGURANCA.
+  4. Digite este codigo PIN aleatorio: {pin}
+  5. Toque no botao PAREAR COM MEU PC.
+
+  APOS A PRIMEIRA CONEXAO:
+  Os dados do seu aparelho ficam salvos permanentemente no PC.
+  Voce nunca mais precisara digitar o PIN neste celular!
+========================================================================
+"""
+        with open(txt_path, "w", encoding="utf-8") as f:
+            f.write(content)
+    except Exception as e:
+        logger.debug(f"Aviso ao escrever SEU_CODIGO_DE_PAREAMENTO.txt: {e}")
 
 def save_config(cfg: dict) -> bool:
     try:
         with open(CONFIG_PATH, "w", encoding="utf-8") as f:
             json.dump(cfg, f, indent=2, ensure_ascii=False)
+        if "security" in cfg and "pin" in cfg["security"]:
+            update_pin_text_file(str(cfg["security"]["pin"]), cfg["security"].get("paired_devices", []))
         return True
     except Exception as e:
         logger.error(f"Erro ao salvar {CONFIG_PATH}: {e}")
         return False
 
 SERVER_CONFIG = load_config()
+
+def get_current_pin() -> str:
+    """Retorna o código PIN aleatório atual do servidor."""
+    return str(SERVER_CONFIG.get("security", {}).get("pin", "------"))
+
+def rotate_random_pin() -> str:
+    """Gera um novo código PIN aleatório, persiste e atualiza tray icon e arquivos."""
+    global SERVER_CONFIG, _tray_icon
+    new_pin = generate_random_pin()
+    if "security" not in SERVER_CONFIG:
+        SERVER_CONFIG["security"] = {}
+    SERVER_CONFIG["security"]["pin"] = new_pin
+    save_config(SERVER_CONFIG)
+    if _tray_icon:
+        try:
+            _tray_icon.title = f"MacroEngine (PIN: {new_pin})"
+        except Exception:
+            pass
+    logger.info(f"Novo PIN aleatório de pareamento gerado: {new_pin}")
+    return new_pin
 
 _single_instance_mutex = None
 
@@ -379,10 +477,135 @@ def setup_tray_icon():
         icon.stop()
         os._exit(0)
 
+    def on_copy_pin(icon, item):
+        curr_pin = get_current_pin()
+        try:
+            cmd = f"Set-Clipboard -Value '{curr_pin}'"
+            subprocess.run(["powershell", "-NoProfile", "-Command", cmd], creationflags=0x08000000)
+        except Exception:
+            pass
+        show_windows_toast("MacroEngine", f"PIN {curr_pin} copiado para a área de transferência!")
+
+    def on_show_pin(icon, item):
+        curr_pin = get_current_pin()
+        def _dialog():
+            if sys.platform == "win32":
+                try:
+                    import ctypes
+                    ctypes.windll.user32.MessageBoxW(
+                        0,
+                        f"Seu código PIN aleatório de pareamento do MacroEngine é:\n\n{curr_pin}\n\nDigite este código no app MacroEngine no seu celular para conectar.\nApós o primeiro pareamento, os dados do celular ficarão salvos e ele não precisará mais digitar o PIN!",
+                        "MacroEngine - Código de Pareamento",
+                        0x40 | 0x10000
+                    )
+                    return
+                except Exception:
+                    pass
+            show_windows_toast("MacroEngine - Pareamento", f"Seu PIN aleatório é: {curr_pin}")
+        threading.Thread(target=_dialog, daemon=True).start()
+
+    def on_regenerate_pin(icon, item):
+        new_pin = rotate_random_pin()
+        show_windows_toast("MacroEngine - Novo PIN", f"Novo PIN aleatório gerado: {new_pin}")
+        def _dialog():
+            if sys.platform == "win32":
+                try:
+                    import ctypes
+                    ctypes.windll.user32.MessageBoxW(
+                        0,
+                        f"Novo código PIN aleatório gerado com sucesso:\n\n{new_pin}\n\nO arquivo e a área de transferência foram atualizados.",
+                        "MacroEngine - Novo PIN Gerado",
+                        0x40 | 0x10000
+                    )
+                except Exception:
+                    pass
+        threading.Thread(target=_dialog, daemon=True).start()
+
+    def get_paired_summary(item):
+        devs = SERVER_CONFIG.get("security", {}).get("paired_devices", [])
+        if not devs:
+            return "📱 Celular: Nenhum pareado ainda"
+        elif len(devs) == 1:
+            return f"📱 Salvo: {devs[0].get('device_name', 'Celular')}"
+        return f"📱 Aparelhos Salvos: {len(devs)}"
+
+    def on_show_paired(icon, item):
+        devs = SERVER_CONFIG.get("security", {}).get("paired_devices", [])
+        if not devs:
+            msg = "Nenhum dispositivo móvel pareado ainda.\n\nAbra o app no celular e digite o PIN aleatório exibido para salvar permanentemente."
+        else:
+            msg = "DISPOSITIVOS AUTORIZADOS SALVOS NO SEU PC:\n\n"
+            for d in devs:
+                name = d.get('device_name', 'Celular Android')
+                dt = d.get('paired_at', '-')
+                msg += f"• {name}\n  Data de pareamento: {dt}\n  Acesso: PERMANENTE SALVO ✅\n\n"
+        def _dialog():
+            if sys.platform == "win32":
+                try:
+                    import ctypes
+                    ctypes.windll.user32.MessageBoxW(0, msg, "MacroEngine - Dispositivos Pareados", 0x40 | 0x10000)
+                except Exception:
+                    pass
+        threading.Thread(target=_dialog, daemon=True).start()
+
+    def on_open_web(icon, item):
+        launch_url_on_desktop(f"http://localhost:{port}/")
+
+    def on_toggle_tunnel(icon, item):
+        stat = tunnel_manager.status()
+        if stat.get("is_running") or stat.get("url"):
+            tunnel_manager.stop()
+            show_windows_toast("MacroEngine", "Túnel Cloudflare interrompido.")
+        else:
+            show_windows_toast("MacroEngine", "Iniciando Túnel Cloudflare... Aguarde...")
+            def _start_bg():
+                res = tunnel_manager.start(port=port, timeout=12.0)
+                url = res.get("url")
+                if url:
+                    show_windows_toast("Túnel Cloudflare Ativo! 🌐", f"URL pública gerada:\n{url}")
+                    try:
+                        cmd = f"Set-Clipboard -Value '{url}'"
+                        subprocess.run(["powershell", "-NoProfile", "-Command", cmd], creationflags=0x08000000)
+                    except Exception:
+                        pass
+                else:
+                    show_windows_toast("MacroEngine", "Túnel Cloudflare iniciando em segundo plano...")
+            threading.Thread(target=_start_bg, daemon=True).start()
+
+    def get_tunnel_menu_label(item):
+        stat = tunnel_manager.status()
+        url = stat.get("url")
+        if url:
+            return f"🛑 Parar Túnel ({url[:28]}...)"
+        elif stat.get("is_running"):
+            return "⏳ Túnel Iniciando..."
+        return "🌐 Iniciar Túnel Cloudflare (Remoto)"
+
+    def on_copy_tunnel_url(icon, item):
+        stat = tunnel_manager.status()
+        url = stat.get("url")
+        if url:
+            try:
+                cmd = f"Set-Clipboard -Value '{url}'"
+                subprocess.run(["powershell", "-NoProfile", "-Command", cmd], creationflags=0x08000000)
+            except Exception:
+                pass
+            show_windows_toast("MacroEngine", f"URL do Túnel copiada para o clipboard:\n{url}")
+        else:
+            show_windows_toast("MacroEngine", "Túnel Cloudflare não está ativo no momento.")
+
     menu = pystray.Menu(
         pystray.MenuItem(f"⚡ MacroEngine (Porta {port})", None, enabled=False),
+        pystray.MenuItem(lambda item: f"🔑 PIN: {get_current_pin()}", on_copy_pin),
+        pystray.MenuItem("📋 Copiar PIN de Pareamento", on_copy_pin),
+        pystray.MenuItem("👁️ Ver PIN na Tela", on_show_pin),
+        pystray.MenuItem("🔄 Gerar Novo PIN Aleatório", on_regenerate_pin),
         pystray.Menu.SEPARATOR,
-        pystray.MenuItem("🌐 Abrir Documentação (Swagger)", on_open_docs),
+        pystray.MenuItem(get_tunnel_menu_label, on_toggle_tunnel),
+        pystray.MenuItem(lambda item: f"📋 Copiar URL do Túnel", on_copy_tunnel_url, enabled=lambda item: tunnel_manager.url is not None),
+        pystray.Menu.SEPARATOR,
+        pystray.MenuItem(get_paired_summary, on_show_paired),
+        pystray.MenuItem("🌐 Painel Web & Dispositivos", on_open_web),
         pystray.MenuItem("🎮 Modo Jogo Turbo", on_toggle_game_mode, checked=lambda item: GAME_MODE_ACTIVE),
         pystray.MenuItem("🚀 Iniciar com o Windows", on_toggle_autostart, checked=lambda item: is_windows_autostart_enabled()),
         pystray.Menu.SEPARATOR,
@@ -390,9 +613,11 @@ def setup_tray_icon():
     )
 
     try:
-        _tray_icon = pystray.Icon("MacroEngine", create_tray_image(), "MacroEngine Server", menu=menu)
+        initial_pin = get_current_pin()
+        _tray_icon = pystray.Icon("MacroEngine", create_tray_image(), f"MacroEngine (PIN: {initial_pin})", menu=menu)
         _tray_icon.run_detached()
         logger.info("Ícone na bandeja do sistema (System Tray) inicializado com sucesso.")
+        show_windows_toast("MacroEngine Ativo", f"Servidor rodando! PIN aleatório: {initial_pin}")
     except Exception as e:
         logger.warning(f"Não foi possível inicializar o ícone da bandeja: {e}")
 
@@ -453,8 +678,80 @@ app.add_middleware(
 )
 
 # ---------------------------------------------------------------------------
+# MIDDLEWARE DE AUTENTICAÇÃO E ZERO TRUST
+# ---------------------------------------------------------------------------
+PUBLIC_PATHS = {
+    "/",
+    "/docs",
+    "/redoc",
+    "/openapi.json",
+    "/api/status",
+    "/api/auth/pair",
+    "/api/auth/regenerate-pin",
+    "/api/auth/paired-devices",
+    "/api/tunnel/status",
+    "/api/tunnel/start",
+    "/api/tunnel/stop",
+    "/api/wol/info",
+    "/api/download/apk"
+}
+
+@app.middleware("http")
+async def security_auth_middleware(request: Request, call_next):
+    # Permite OPTIONS sem validação para não quebrar CORS
+    if request.method == "OPTIONS":
+        return await call_next(request)
+
+    path = request.url.path
+    if path in PUBLIC_PATHS or path.startswith("/api/models/"):
+        return await call_next(request)
+
+    sec = SERVER_CONFIG.get("security", {})
+    if not sec.get("require_auth", False):
+        return await call_next(request)
+
+    header_token = request.headers.get("X-MacroEngine-Key")
+    query_token = request.query_params.get("token")
+    auth_header = request.headers.get("Authorization")
+    if auth_header and auth_header.startswith("Bearer "):
+        header_token = auth_header[7:].strip()
+
+    provided_token = header_token or query_token
+    expected_token = sec.get("auth_token", "")
+    paired_devices = sec.get("paired_devices", [])
+
+    import secrets
+    is_authorized = False
+    if provided_token and expected_token and secrets.compare_digest(provided_token, expected_token):
+        is_authorized = True
+    elif provided_token and paired_devices:
+        for dev in paired_devices:
+            dev_token = dev.get("token", "")
+            if dev_token and secrets.compare_digest(provided_token, dev_token):
+                is_authorized = True
+                try:
+                    dev["last_seen"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                except Exception:
+                    pass
+                break
+
+    if not is_authorized:
+        return Response(
+            content=json.dumps({"detail": "Não autorizado. Pareie seu dispositivo ou forneça o token no header X-MacroEngine-Key."}),
+            status_code=401,
+            media_type="application/json"
+        )
+
+    return await call_next(request)
+
+# ---------------------------------------------------------------------------
 # MODELOS DE DADOS
 # ---------------------------------------------------------------------------
+class PairRequest(BaseModel):
+    pin: str = Field(..., description="PIN de 6 dígitos aleatório exibido no servidor desktop")
+    device_name: Optional[str] = Field(default="Celular Android", description="Nome ou modelo do aparelho")
+    device_id: Optional[str] = Field(default="", description="ID único do aparelho")
+
 class OpenUrlRequest(BaseModel):
     url: str = Field(..., description="URL ou link a ser aberto no navegador padrão")
 
@@ -1951,7 +2248,7 @@ class CloudflareTunnelManager:
             try:
                 kwargs = {
                     "stdout": subprocess.PIPE,
-                    "stderr": subprocess.PIPE,
+                    "stderr": subprocess.STDOUT,
                     "text": True,
                     "bufsize": 1
                 }
@@ -1970,7 +2267,7 @@ class CloudflareTunnelManager:
                     try:
                         import re
                         while self.is_running and self.process == proc:
-                            line = proc.stderr.readline()
+                            line = proc.stdout.readline()
                             if not line:
                                 break
                             clean_line = line.strip()
@@ -1990,8 +2287,8 @@ class CloudflareTunnelManager:
                 t = threading.Thread(target=_monitor_output, args=(self.process,), daemon=True)
                 t.start()
 
-                # Aguarda até 8 segundos para capturar a URL antes de responder à chamada
-                url_found_event.wait(timeout=min(8.0, timeout))
+                # Aguarda até 10 segundos para capturar a URL antes de responder à chamada
+                url_found_event.wait(timeout=min(10.0, timeout))
 
                 return {
                     "status": "running" if self.url else "starting",
@@ -2028,14 +2325,13 @@ class CloudflareTunnelManager:
             return {"status": "stopped", "is_running": False}
 
     def status(self) -> Dict[str, Any]:
-        if self.process and self.process.poll() is not None:
-            self.is_running = False
-            self.url = None
+        is_active = self.is_running and (self.process is not None and self.process.poll() is None)
         return {
-            "is_running": self.is_running and self.url is not None,
+            "status": "running" if self.url else ("starting" if is_active else "stopped"),
+            "is_running": is_active,
             "url": self.url,
             "started_at": self.started_at,
-            "uptime": int(time.time() - self.started_at) if self.is_running and self.started_at > 0 else 0
+            "uptime": int(time.time() - self.started_at) if is_active and self.started_at > 0 else 0
         }
 
 tunnel_manager = CloudflareTunnelManager()
@@ -2142,6 +2438,450 @@ def get_primary_mac() -> str:
 # ---------------------------------------------------------------------------
 # ENDPOINTS REST DA API
 # ---------------------------------------------------------------------------
+@app.get("/", response_class=HTMLResponse)
+def index_web_dashboard():
+    """Painel Web interativo com PIN de Pareamento e status do servidor."""
+    pin = get_current_pin()
+    hostname = socket.gethostname()
+    try:
+        local_ip = socket.gethostbyname(hostname)
+    except Exception:
+        local_ip = "127.0.0.1"
+    port = SERVER_CONFIG.get("server", {}).get("port", 8000)
+
+    sec = SERVER_CONFIG.get("security", {})
+    paired_list = sec.get("paired_devices", [])
+    if paired_list:
+        devices_html = ""
+        for dev in paired_list:
+            d_name = dev.get("device_name", "Celular Android")
+            d_date = dev.get("paired_at", "")
+            devices_html += f"""<div class="device-item">
+                <div>
+                    <strong>📱 {d_name}</strong>
+                    <div style="font-size: 11px; color: #94A3B8;">Pareado em: {d_date}</div>
+                </div>
+                <span class="device-badge">SALVO PERMANENTE</span>
+            </div>"""
+    else:
+        devices_html = '<div style="color: #64748B; font-size: 12px; text-align: center; padding: 8px 0;">Nenhum aparelho pareado ainda.<br>Após a primeira conexão, os dados ficarão salvos aqui.</div>'
+
+    html = f"""<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MacroEngine Desktop Server</title>
+    <style>
+        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+        body {{
+            background: #0A0E17;
+            color: #E2E8F0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            padding: 20px;
+        }}
+        .card {{
+            background: #121826;
+            border: 1px solid #1E293B;
+            border-radius: 20px;
+            max-width: 520px;
+            width: 100%;
+            padding: 32px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.5);
+            text-align: center;
+        }}
+        .badge {{
+            display: inline-block;
+            background: rgba(16, 185, 129, 0.15);
+            color: #10B981;
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 1px;
+            padding: 6px 14px;
+            border-radius: 999px;
+            border: 1px solid rgba(16, 185, 129, 0.3);
+            margin-bottom: 16px;
+        }}
+        h1 {{
+            font-size: 26px;
+            font-weight: 800;
+            margin-bottom: 8px;
+            color: #FFFFFF;
+        }}
+        p.subtitle {{
+            color: #94A3B8;
+            font-size: 14px;
+            margin-bottom: 24px;
+        }}
+        .pin-box {{
+            background: #0B0F19;
+            border: 2px solid #00F0FF;
+            border-radius: 16px;
+            padding: 24px;
+            margin-bottom: 24px;
+            box-shadow: 0 0 25px rgba(0, 240, 255, 0.15);
+        }}
+        .pin-label {{
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 1.5px;
+            color: #00F0FF;
+            text-transform: uppercase;
+            margin-bottom: 8px;
+        }}
+        .pin-code {{
+            font-family: 'Consolas', 'Courier New', monospace;
+            font-size: 44px;
+            font-weight: 900;
+            letter-spacing: 10px;
+            color: #FFFFFF;
+            text-shadow: 0 0 12px rgba(0, 240, 255, 0.4);
+        }}
+        .copy-btn {{
+            background: #00F0FF;
+            color: #0A0E17;
+            border: none;
+            padding: 12px 24px;
+            font-size: 14px;
+            font-weight: 700;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: all 0.2s;
+            margin-top: 14px;
+        }}
+        .copy-btn:hover {{
+            background: #33F3FF;
+            transform: scale(1.02);
+        }}
+        .instructions {{
+            text-align: left;
+            background: #172033;
+            border-radius: 12px;
+            padding: 16px;
+            font-size: 13px;
+            color: #CBD5E1;
+            line-height: 1.6;
+            margin-bottom: 24px;
+        }}
+        .instructions ol {{
+            padding-left: 20px;
+        }}
+        .links {{
+            display: flex;
+            gap: 12px;
+            justify-content: center;
+        }}
+        .links a {{
+            color: #94A3B8;
+            text-decoration: none;
+            font-size: 13px;
+            padding: 8px 14px;
+            background: #1E293B;
+            border-radius: 8px;
+            transition: all 0.2s;
+        }}
+        .links a:hover {{
+            color: #FFFFFF;
+            background: #334155;
+        }}
+        .btn-group {{
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            margin-top: 14px;
+        }}
+        .regen-btn {{
+            background: #1E293B;
+            color: #00F0FF;
+            border: 1px solid #00F0FF;
+            padding: 12px 18px;
+            font-size: 13px;
+            font-weight: 700;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }}
+        .regen-btn:hover {{
+            background: rgba(0, 240, 255, 0.15);
+            transform: scale(1.02);
+        }}
+        .paired-card {{
+            background: #111827;
+            border: 1px solid #1F2937;
+            border-radius: 14px;
+            padding: 16px;
+            margin-bottom: 24px;
+            text-align: left;
+        }}
+        .paired-title {{
+            font-size: 12px;
+            font-weight: 700;
+            color: #10B981;
+            letter-spacing: 1px;
+            margin-bottom: 10px;
+            text-transform: uppercase;
+        }}
+        .device-item {{
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: #1E293B;
+            border-radius: 8px;
+            padding: 10px 14px;
+            margin-bottom: 8px;
+            font-size: 13px;
+            color: #F1F5F9;
+        }}
+        .device-badge {{
+            background: rgba(16, 185, 129, 0.2);
+            color: #10B981;
+            font-size: 10px;
+            font-weight: 700;
+            padding: 3px 8px;
+            border-radius: 6px;
+        }}
+    </style>
+</head>
+<body>
+    <div class="card">
+        <div class="badge">● SERVIDOR ONLINE</div>
+        <h1>MacroEngine Server</h1>
+        <p class="subtitle">{hostname} ({local_ip}:{port})</p>
+
+        <div class="pin-box">
+            <div class="pin-label">CÓDIGO PIN ALEATÓRIO DE PAREAMENTO</div>
+            <div class="pin-code" id="pinText">{pin}</div>
+            <div class="btn-group">
+                <button class="copy-btn" onclick="copyPin()">📋 Copiar PIN</button>
+                <button class="regen-btn" onclick="regeneratePin()">🔄 Gerar Novo PIN</button>
+            </div>
+        </div>
+
+        <div class="paired-card">
+            <div class="paired-title">📱 APARELHOS SALVOS PERMANENTEMENTE ({len(paired_list)})</div>
+            <div id="devicesContainer">
+                {devices_html}
+            </div>
+        </div>
+
+        <div class="instructions">
+            <strong>Como conectar o celular:</strong>
+            <ol>
+                <li>Abra o <strong>MacroEngine</strong> no seu celular.</li>
+                <li>Toque no ícone de <strong>Configurações</strong> (engrenagem).</li>
+                <li>Na primeira aba (Rede), veja <strong>PAREAMENTO & SEGURANÇA</strong>.</li>
+                <li>Digite o código <strong><span id="pinInst">{pin}</span></strong> e toque em <strong>PAREAR COM MEU PC</strong>.</li>
+            </ol>
+            <div style="margin-top: 10px; font-size: 11px; color: #10B981;">
+                🛡️ <strong>Acesso Permanente:</strong> Após parear uma única vez, os dados do aparelho ficam salvos no seu PC e você nunca mais precisará digitar o PIN!
+            </div>
+        </div>
+
+        <div class="paired-card" style="border-color: #3B82F6; margin-top: 14px;">
+            <div class="paired-title" style="color: #60A5FA;">🌐 ACESSO REMOTO (CLOUDFLARE QUICK TUNNEL)</div>
+            <div style="font-size: 13px; color: #CBD5E1; margin-bottom: 8px;">
+                Status: <span id="tunnelBadge" style="font-weight: 700; color: #94A3B8;">Verificando...</span>
+            </div>
+            <div id="tunnelUrlBox" style="display: none; background: #0F172A; border: 1px dashed #3B82F6; border-radius: 8px; padding: 10px; margin-bottom: 10px; word-break: break-all; font-family: monospace; font-size: 12px; color: #93C5FD;">
+            </div>
+            <div style="display: flex; gap: 8px;">
+                <button id="btnToggleTunnel" class="regen-btn" style="border-color: #3B82F6; color: #60A5FA; flex: 1;" onclick="toggleTunnel()">🚀 Iniciar Túnel no PC</button>
+                <button id="btnCopyTunnel" class="copy-btn" style="margin-top: 0; padding: 10px 16px; font-size: 13px; display: none;" onclick="copyTunnelUrl()">📋 Copiar URL</button>
+            </div>
+        </div>
+
+        <div class="links">
+            <a href="/docs">🌐 Swagger Docs</a>
+            <a href="/api/download/apk">📱 Baixar APK 1.2.5v</a>
+        </div>
+    </div>
+
+    <script>
+        let currentPin = '{pin}';
+        function copyPin() {{
+            navigator.clipboard.writeText(currentPin).then(() => {{
+                alert('Código PIN ' + currentPin + ' copiado com sucesso!');
+            }});
+        }}
+        function regeneratePin() {{
+            fetch('/api/auth/regenerate-pin', {{ method: 'POST' }})
+                .then(r => r.json())
+                .then(data => {{
+                    if (data.pin) {{
+                        currentPin = data.pin;
+                        document.getElementById('pinText').innerText = data.pin;
+                        document.getElementById('pinInst').innerText = data.pin;
+                        alert('Novo código PIN aleatório gerado: ' + data.pin);
+                    }}
+                }})
+                .catch(err => alert('Erro ao gerar novo PIN: ' + err));
+        }}
+
+        function updateTunnelStatus() {{
+            fetch('/api/tunnel/status')
+                .then(r => r.json())
+                .then(d => {{
+                    const badge = document.getElementById('tunnelBadge');
+                    const urlBox = document.getElementById('tunnelUrlBox');
+                    const btnToggle = document.getElementById('btnToggleTunnel');
+                    const btnCopy = document.getElementById('btnCopyTunnel');
+                    if (d.url) {{
+                        badge.innerText = 'ATIVO (Online) 🟢';
+                        badge.style.color = '#10B981';
+                        urlBox.style.display = 'block';
+                        urlBox.innerText = d.url;
+                        btnToggle.innerText = '🛑 Parar Túnel';
+                        btnToggle.style.borderColor = '#EF4444';
+                        btnToggle.style.color = '#EF4444';
+                        btnCopy.style.display = 'block';
+                    }} else if (d.is_running || d.status === 'starting') {{
+                        badge.innerText = 'INICIANDO... ⏳';
+                        badge.style.color = '#F59E0B';
+                        urlBox.style.display = 'none';
+                        btnToggle.innerText = '⏳ Aguardando URL...';
+                        btnCopy.style.display = 'none';
+                    }} else {{
+                        badge.innerText = 'PARADO (Desativado) ⚪';
+                        badge.style.color = '#94A3B8';
+                        urlBox.style.display = 'none';
+                        btnToggle.innerText = '🚀 Iniciar Túnel no PC';
+                        btnToggle.style.borderColor = '#3B82F6';
+                        btnToggle.style.color = '#60A5FA';
+                        btnCopy.style.display = 'none';
+                    }}
+                }})
+                .catch(() => {{}});
+        }}
+
+        function toggleTunnel() {{
+            const btn = document.getElementById('btnToggleTunnel');
+            if (btn.innerText.includes('Parar')) {{
+                fetch('/api/tunnel/stop', {{ method: 'POST' }}).then(() => updateTunnelStatus());
+            }} else {{
+                btn.innerText = '⏳ Conectando à Cloudflare...';
+                fetch('/api/tunnel/start', {{ method: 'POST' }}).then(() => {{
+                    let checks = 0;
+                    const interval = setInterval(() => {{
+                        updateTunnelStatus();
+                        checks++;
+                        if (checks > 12) clearInterval(interval);
+                    }}, 1200);
+                }});
+            }}
+        }}
+
+        function copyTunnelUrl() {{
+            const url = document.getElementById('tunnelUrlBox').innerText;
+            navigator.clipboard.writeText(url).then(() => alert('URL pública do túnel copiada com sucesso:\n' + url));
+        }}
+
+        updateTunnelStatus();
+        setInterval(updateTunnelStatus, 5000);
+    </script>
+</body>
+</html>"""
+    return HTMLResponse(content=html)
+
+@app.post("/api/auth/regenerate-pin")
+def api_regenerate_pin():
+    """Gera um novo código PIN aleatório sob demanda."""
+    new_pin = rotate_random_pin()
+    return {"status": "ok", "pin": new_pin}
+
+@app.get("/api/auth/paired-devices")
+def api_get_paired_devices():
+    """Retorna a lista de aparelhos pareados permanentemente."""
+    sec = SERVER_CONFIG.get("security", {})
+    devices = []
+    for d in sec.get("paired_devices", []):
+        devices.append({
+            "device_id": d.get("device_id"),
+            "device_name": d.get("device_name"),
+            "paired_at": d.get("paired_at"),
+            "last_seen": d.get("last_seen"),
+            "client_ip": d.get("client_ip")
+        })
+    return {"paired_devices": devices, "total": len(devices)}
+
+@app.delete("/api/auth/unpair/{device_id}")
+def api_unpair_device(device_id: str):
+    """Remove um aparelho da lista de autorizados."""
+    sec = SERVER_CONFIG.get("security", {})
+    if "paired_devices" in sec:
+        sec["paired_devices"] = [d for d in sec["paired_devices"] if d.get("device_id") != device_id]
+        save_config(SERVER_CONFIG)
+        return {"status": "ok", "message": f"Dispositivo '{device_id}' despareado com sucesso."}
+    return {"status": "not_found"}
+
+@app.post("/api/auth/pair")
+def pair_device(payload: PairRequest, request: Request):
+    """
+    Pareia o celular via PIN aleatório de 6 dígitos.
+    Ao parear com sucesso, salva os dados do aparelho de forma permanente no config.json,
+    gera um novo PIN aleatório (invalidando o anterior) e retorna o token de acesso.
+    """
+    sec = SERVER_CONFIG.get("security", {})
+    expected_pin = str(sec.get("pin", "")).strip()
+    provided_pin = str(payload.pin).strip()
+
+    import secrets
+    from datetime import datetime
+
+    if not expected_pin or not secrets.compare_digest(provided_pin, expected_pin):
+        logger.warning(f"Tentativa de pareamento falhou com PIN incorreto: '{provided_pin}' (esperado: '{expected_pin}')")
+        raise HTTPException(status_code=401, detail="PIN incorreto. Verifique o código exibido no servidor do PC.")
+
+    device_token = secrets.token_hex(24)
+    client_ip = request.client.host if request.client else "unknown"
+    dev_name = payload.device_name.strip() if payload.device_name else "Celular Android"
+    dev_id = payload.device_id.strip() if payload.device_id else f"dev_{secrets.token_hex(4)}"
+
+    if "paired_devices" not in sec or not isinstance(sec["paired_devices"], list):
+        sec["paired_devices"] = []
+
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    existing = False
+    for d in sec["paired_devices"]:
+        if d.get("device_id") == dev_id or d.get("device_name") == dev_name:
+            d["token"] = device_token
+            d["paired_at"] = now_str
+            d["last_seen"] = now_str
+            d["client_ip"] = client_ip
+            existing = True
+            break
+
+    if not existing:
+        sec["paired_devices"].append({
+            "device_id": dev_id,
+            "device_name": dev_name,
+            "token": device_token,
+            "paired_at": now_str,
+            "last_seen": now_str,
+            "client_ip": client_ip
+        })
+
+    # O celular conectou com sucesso pela primeira vez!
+    # Gera um novo PIN aleatório para a próxima conexão
+    new_pin = rotate_random_pin()
+    logger.info(f"Aparelho '{dev_name}' pareado com sucesso e salvo permanentemente! Novo PIN gerado: {new_pin}")
+
+    show_windows_toast(
+        "MacroEngine - Celular Pareado! 📱",
+        f"Aparelho '{dev_name}' salvo permanentemente no PC!"
+    )
+
+    return {
+        "status": "paired",
+        "message": f"Aparelho '{dev_name}' pareado com sucesso e salvo permanentemente!",
+        "auth_token": device_token,
+        "device_name": dev_name,
+        "is_saved_permanently": True
+    }
+
 @app.get("/api/status")
 def get_status():
     """Retorna o status do servidor, plataforma, endereço MAC e estado dos módulos."""
@@ -2161,6 +2901,7 @@ def get_status():
         "local_ip": local_ip,
         "mac_address": primary_mac,
         "os": f"{platform.system()} {platform.release()}",
+        "auth_required": SERVER_CONFIG.get("security", {}).get("require_auth", True),
         "pyautogui_enabled": pyautogui is not None,
         "pycaw_enabled": PYCAW_AVAILABLE,
         "audio_stream_active": audio_streamer.is_running,
@@ -2952,13 +3693,13 @@ def capture_pc_screen_jpeg(width: int = 960, height: int = 540, quality: int = 4
     img.save(buf, format="JPEG", quality=quality)
     return buf.getvalue()
 
-def stream_pc_screen():
-    """Gera stream contínuo de frames MJPEG da tela do PC."""
+async def stream_pc_screen():
+    """Gera stream contínuo de frames MJPEG da tela do PC de forma assíncrona sem travar threads."""
     while True:
-        frame = capture_pc_screen_jpeg()
+        frame = await asyncio.to_thread(capture_pc_screen_jpeg)
         yield (b'--frame\r\n'
                b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
-        time.sleep(0.04)
+        await asyncio.sleep(0.035)
 
 def get_adb_binary() -> str:
     local_sdk = os.path.expandvars(r"%LOCALAPPDATA%\Android\Sdk\platform-tools\adb.exe")
@@ -3109,7 +3850,7 @@ def stream_phone_screen():
         time.sleep(0.03)
 
 @app.get("/api/screen/stream")
-def get_pc_screen_stream():
+async def get_pc_screen_stream():
     """Retorna o stream de vídeo MJPEG em tempo real da tela do PC."""
     return StreamingResponse(
         stream_pc_screen(),
@@ -3302,7 +4043,45 @@ _last_bytes_sent = 0
 _last_bytes_recv = 0
 _net_lock = threading.Lock()
 
+_last_disk_time = 0.0
+_last_disk_read = 0
+_last_disk_write = 0
+_disk_lock = threading.Lock()
+
+_last_gpu_time = 0.0
+_cached_gpu_telemetry = None
+_gpu_lock = threading.Lock()
+
+_cached_cpu_name = None
+_cached_motherboard = None
+
+def _get_static_sys_info():
+    global _cached_cpu_name, _cached_motherboard
+    if _cached_cpu_name is None:
+        try:
+            import winreg
+            key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"HARDWARE\DESCRIPTION\System\CentralProcessor\0")
+            _cached_cpu_name = winreg.QueryValueEx(key, "ProcessorNameString")[0].strip()
+        except Exception:
+            _cached_cpu_name = platform.processor() or "Processador PC"
+    if _cached_motherboard is None:
+        try:
+            import winreg
+            key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"HARDWARE\DESCRIPTION\System\BIOS")
+            mb_man = winreg.QueryValueEx(key, "BaseBoardManufacturer")[0].strip()
+            mb_prod = winreg.QueryValueEx(key, "BaseBoardProduct")[0].strip()
+            _cached_motherboard = f"{mb_man} {mb_prod}".strip()
+        except Exception:
+            _cached_motherboard = "Placa-Mãe"
+    return _cached_cpu_name, _cached_motherboard
+
 def _get_gpu_telemetry() -> Optional[Dict[str, Any]]:
+    global _last_gpu_time, _cached_gpu_telemetry
+    now = time.time()
+    with _gpu_lock:
+        if (now - _last_gpu_time) < 1.5 and _cached_gpu_telemetry is not None:
+            return _cached_gpu_telemetry
+
     import shutil
     nvidia_smi = shutil.which("nvidia-smi")
     if not nvidia_smi and os.path.exists(r"C:\Windows\system32\nvidia-smi.exe"):
@@ -3310,37 +4089,96 @@ def _get_gpu_telemetry() -> Optional[Dict[str, Any]]:
     if nvidia_smi:
         try:
             out = subprocess.check_output(
-                [nvidia_smi, "--query-gpu=name,temperature.gpu,utilization.gpu,memory.used,memory.total", "--format=csv,noheader,nounits"],
+                [nvidia_smi, "--query-gpu=name,temperature.gpu,utilization.gpu,memory.used,memory.total,memory.free,fan.speed,power.draw,power.limit,clocks.current.graphics,clocks.current.memory", "--format=csv,noheader,nounits"],
                 encoding="utf-8",
                 timeout=1.5
             )
             parts = [p.strip() for p in out.strip().split(",")]
-            if len(parts) >= 5:
-                return {
+            if len(parts) >= 11:
+                res = {
                     "name": parts[0],
-                    "temperature_c": int(parts[1]) if parts[1].isdigit() else 0,
-                    "usage_percent": int(parts[2]) if parts[2].isdigit() else 0,
-                    "memory_used_mb": int(parts[3]) if parts[3].isdigit() else 0,
-                    "memory_total_mb": int(parts[4]) if parts[4].isdigit() else 0
+                    "temperature_c": int(round(float(parts[1]))) if parts[1] != "[N/A]" else 0,
+                    "usage_percent": int(round(float(parts[2]))) if parts[2] != "[N/A]" else 0,
+                    "memory_used_mb": int(round(float(parts[3]))) if parts[3] != "[N/A]" else 0,
+                    "memory_total_mb": int(round(float(parts[4]))) if parts[4] != "[N/A]" else 0,
+                    "memory_free_mb": int(round(float(parts[5]))) if parts[5] != "[N/A]" else 0,
+                    "fan_percent": int(round(float(parts[6]))) if parts[6] != "[N/A]" else 0,
+                    "power_w": round(float(parts[7]), 1) if parts[7] != "[N/A]" else 0.0,
+                    "power_limit_w": round(float(parts[8]), 1) if parts[8] != "[N/A]" else 0.0,
+                    "clock_core_mhz": int(round(float(parts[9]))) if parts[9] != "[N/A]" else 0,
+                    "clock_mem_mhz": int(round(float(parts[10]))) if parts[10] != "[N/A]" else 0,
                 }
+                with _gpu_lock:
+                    _cached_gpu_telemetry = res
+                    _last_gpu_time = now
+                return res
         except Exception:
             pass
+
+    # Fallback para GPU genérica / Intel / AMD
+    try:
+        cpu_name, mb_name = _get_static_sys_info()
+        import winreg
+        key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winsat")
+        primary_adapter = winreg.QueryValueEx(key, "PrimaryAdapterString")[0].strip()
+        if primary_adapter:
+            return {
+                "name": primary_adapter,
+                "temperature_c": 0,
+                "usage_percent": 0,
+                "memory_used_mb": 0,
+                "memory_total_mb": 0,
+                "memory_free_mb": 0,
+                "fan_percent": 0,
+                "power_w": 0.0,
+                "power_limit_w": 0.0,
+                "clock_core_mhz": 0,
+                "clock_mem_mhz": 0
+            }
+    except Exception:
+        pass
+
     return None
+
+def _get_cpu_temperature(fallback_percent: float) -> int:
+    """Tenta ler a temperatura real de sensores ACPI/WMI/psutil com fallback termico dinamico calibrado."""
+    if hasattr(psutil, "sensors_temperatures"):
+        try:
+            temps = psutil.sensors_temperatures()
+            if temps:
+                for _, entries in temps.items():
+                    for entry in entries:
+                        if hasattr(entry, "current") and entry.current and entry.current > 0:
+                            return int(entry.current)
+        except Exception:
+            pass
+
+    # Modelo térmico reativo calibrado para desktop/Ryzen (34C idle, responde dinamicamente a carga)
+    base = 34.0
+    dynamic = (fallback_percent ** 1.08) * 0.44
+    return int(min(95, round(base + dynamic)))
 
 @app.get("/api/hardware/telemetry")
 def get_hardware_telemetry():
-    """Retorna telemetria completa de hardware do PC em tempo real."""
+    """Retorna telemetria ultra-completa de hardware do PC em tempo real."""
     global _last_net_time, _last_bytes_sent, _last_bytes_recv
-    import psutil
+    global _last_disk_time, _last_disk_read, _last_disk_write
 
     # CPU
     cpu_percent = psutil.cpu_percent(interval=None)
+    per_core_percent = psutil.cpu_percent(interval=None, percpu=True)
     cpu_freq = psutil.cpu_freq()
     cpu_cores = psutil.cpu_count(logical=True)
-    estimated_cpu_temp = int(38 + (cpu_percent * 0.48))
+    physical_cores = psutil.cpu_count(logical=False) or (cpu_cores // 2 if cpu_cores else 1)
+    estimated_cpu_temp = _get_cpu_temperature(cpu_percent)
+    cpu_name, mb_name = _get_static_sys_info()
 
-    # RAM
+    # RAM & Swap
     ram = psutil.virtual_memory()
+    try:
+        swap = psutil.swap_memory()
+    except Exception:
+        swap = None
 
     # Discos
     disks = []
@@ -3360,8 +4198,26 @@ def get_hardware_telemetry():
         except Exception:
             pass
 
-    # Rede (Cálculo de taxa KB/s)
+    # Taxa de I/O de Disco (Leitura / Gravação em MB/s)
     now = time.time()
+    disk_read_mbps = 0.0
+    disk_write_mbps = 0.0
+    try:
+        dio = psutil.disk_io_counters()
+        if dio:
+            with _disk_lock:
+                if _last_disk_time > 0 and now > _last_disk_time:
+                    dt = now - _last_disk_time
+                    if dt > 0.1:
+                        disk_read_mbps = round((dio.read_bytes - _last_disk_read) / (1024 * 1024) / dt, 1)
+                        disk_write_mbps = round((dio.write_bytes - _last_disk_write) / (1024 * 1024) / dt, 1)
+                _last_disk_time = now
+                _last_disk_read = dio.read_bytes
+                _last_disk_write = dio.write_bytes
+    except Exception:
+        pass
+
+    # Rede (Cálculo de taxa KB/s e totais)
     net = psutil.net_io_counters()
     upload_kbps = 0.0
     download_kbps = 0.0
@@ -3378,27 +4234,58 @@ def get_hardware_telemetry():
     # GPU
     gpu = _get_gpu_telemetry()
 
+    # Uptime
+    boot_time = psutil.boot_time()
+    uptime_sec = int(now - boot_time)
+    hours = uptime_sec // 3600
+    minutes = (uptime_sec % 3600) // 60
+    if hours >= 24:
+        days = hours // 24
+        rem_hours = hours % 24
+        uptime_str = f"{days}d {rem_hours}h {minutes}m"
+    elif hours > 0:
+        uptime_str = f"{hours}h {minutes}m"
+    else:
+        uptime_str = f"{minutes}m"
+
     return {
         "status": "ok",
         "timestamp": int(now),
         "cpu": {
+            "name": cpu_name,
             "percent": cpu_percent,
             "freq_ghz": round(cpu_freq.current / 1000, 2) if cpu_freq else 0.0,
             "cores": cpu_cores,
-            "temperature_c": estimated_cpu_temp
+            "physical_cores": physical_cores,
+            "temperature_c": estimated_cpu_temp,
+            "cores_percent": [round(c, 1) for c in per_core_percent]
         },
         "ram": {
             "percent": ram.percent,
             "used_gb": round(ram.used / (1024**3), 1),
             "total_gb": round(ram.total / (1024**3), 1),
-            "free_gb": round(ram.available / (1024**3), 1)
+            "free_gb": round(ram.available / (1024**3), 1),
+            "swap_percent": swap.percent if swap else 0.0,
+            "swap_used_gb": round(swap.used / (1024**3), 1) if swap else 0.0,
+            "swap_total_gb": round(swap.total / (1024**3), 1) if swap else 0.0
         },
         "network": {
             "upload_kbps": max(0.0, upload_kbps),
-            "download_kbps": max(0.0, download_kbps)
+            "download_kbps": max(0.0, download_kbps),
+            "total_sent_mb": round(net.bytes_sent / (1024**2), 1),
+            "total_recv_mb": round(net.bytes_recv / (1024**2), 1)
         },
         "gpu": gpu,
-        "disks": disks
+        "disks": disks,
+        "system": {
+            "uptime_str": uptime_str,
+            "uptime_seconds": uptime_sec,
+            "hostname": socket.gethostname(),
+            "os_name": f"{platform.system()} {platform.release()}",
+            "motherboard": mb_name,
+            "disk_read_mbps": max(0.0, disk_read_mbps),
+            "disk_write_mbps": max(0.0, disk_write_mbps)
+        }
     }
 
 
@@ -4404,7 +5291,7 @@ class UdpDiscoveryBeacon:
                             "hostname": socket.gethostname(),
                             "ip": self._get_local_ip(),
                             "port": self.server_port,
-                            "version": "1.2.3v"
+                            "version": "1.2.5v"
                         }
                         sock.sendto(json.dumps(response).encode("utf-8"), addr)
                 except socket.timeout:
@@ -4429,7 +5316,7 @@ class UdpDiscoveryBeacon:
                         "hostname": socket.gethostname(),
                         "ip": self._get_local_ip(),
                         "port": self.server_port,
-                        "version": "1.2.3v"
+                        "version": "1.2.5v"
                     }
                     data = json.dumps(payload).encode("utf-8")
                     sock.sendto(data, ("255.255.255.255", self.beacon_port))
@@ -4494,8 +5381,12 @@ if __name__ == "__main__":
             print("  >> MACROENGINE - SERVIDOR DE AUTOMACAO & STREAMING <<")
             print("=" * 65)
             print(f"  * IP Local da Maquina:     {ip_preview}")
+            pin_code = SERVER_CONFIG.get("security", {}).get("pin", "123456")
+            auth_status = "PROTEGIDO (Token Ativo)" if SERVER_CONFIG.get("security", {}).get("require_auth", True) else "DESATIVADO"
             print(f"  * Porta da API REST:       {port}")
             print(f"  * Porta Audio UDP:         {SERVER_CONFIG.get('audio_streaming', {}).get('default_port', 50005)}")
+            print(f"  * PIN de Pareamento:       {pin_code}  (Digite no App Android)")
+            print(f"  * Seguranca:               {auth_status}")
             print(f"  * Iniciar com o Windows:   {'ATIVADO (Silencioso)' if autostart_active else 'DESATIVADO'}")
             print(f"  * Modo Jogo Turbo:         {'ATIVO' if GAME_MODE_ACTIVE else 'DISPONIVEL'}")
             print(f"  * Swagger Docs:            http://{ip_preview}:{port}/docs")

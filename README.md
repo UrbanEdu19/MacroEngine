@@ -38,7 +38,7 @@ O **MacroEngine Desktop Server** é a espinha dorsal do ecossistema MacroEngine.
 5. **Ícone na Bandeja do Sistema (System Tray)**: Acesso rápido a status em tempo real, documentação Swagger, alternador de Modo Jogo Turbo e controle de autostart diretamente pela bandeja do Windows.
 6. **Modo Jogo Turbo & Mais de 100 Macros**: Comandos táticos para os jogos mais jogados do momento (CS2, Deadlock, Warzone, Helldivers 2, PUBG, Apex, Valorant, Delta Force, Battlefield), controle de clipes Nvidia ShadowPlay, OBS Studio, Discord, além de macros de produtividade e controle do próprio celular via ADB.
 
-> 📱 **Aplicativos Android Prontos para Instalação:** Os instaladores oficiais **`MacroEngine-1.2.4v.apk`** (versão mais recente com Backup & Restauração Integral Persistente, Adicionar & Pinar Sites no Lançador de Links, Multi-Idiomas Global i18n, Auto-Descoberta UDP Beacon e Notificações Windows HUD), **`MacroEngine-1.2.3v.apk`**, **`MacroEngine-1.2.2v.apk`**, **`MacroEngine-1.2.1v.apk`** e **`MacroEngine-1.1.9v.apk`** (versões anteriores preservadas) já estão inclusos diretamente na raiz deste repositório e na seção [Releases](https://github.com/UrbanEdu19/MacroEngine/releases)! Basta passá-los para o seu smartphone Android e instalar diretamente, sem precisar de Android Studio ou compilação.
+> 📱 **Aplicativos Android Prontos para Instalação:** Os instaladores oficiais **`MacroEngine-1.2.5v.apk`** (versão mais recente com Pareamento Seguro via PIN Aleatório, Cloudflare Tunnel Remoto Nativo para 4G/Fora de Casa, Monitor de Hardware Ultra-Completo com 16 Threads CPU, GPU RTX com Fan/Power/Clocks/VRAM, Swap, I/O de Disco e Tráfego de Rede ao Vivo), **`MacroEngine-1.2.4v.apk`**, **`MacroEngine-1.2.3v.apk`**, **`MacroEngine-1.2.2v.apk`**, **`MacroEngine-1.2.1v.apk`** e **`MacroEngine-1.1.9v.apk`** (versões anteriores preservadas) já estão inclusos diretamente na raiz deste repositório e na seção [Releases](https://github.com/UrbanEdu19/MacroEngine/releases)! Basta passá-los para o seu smartphone Android e instalar diretamente, sem precisar de Android Studio ou compilação.
 
 ---
 
@@ -522,6 +522,7 @@ O script testa automaticamente:
 ## 📁 Estrutura de Arquivos
 
 ```text
+├── MacroEngine-1.2.5v.apk        # Instalador Android oficial v1.2.5v (Pareamento Seguro PIN, Tunnel Remoto, Monitor Hardware HUD)
 ├── MacroEngine-1.2.4v.apk        # Instalador Android oficial v1.2.4v (Backup Integral Externo, Adicionar/Pinar Sites)
 ├── MacroEngine-1.2.3v.apk        # Instalador Android oficial v1.2.3v (Multi-Idiomas, UDP Beacon, Windows HUD)
 ├── MacroEngine-1.2.2v.apk        # Instalador Android oficial v1.2.2v (Cloudflare Tunnel, Multi-IA, Launcher)

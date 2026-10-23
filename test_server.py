@@ -57,20 +57,57 @@ def check_endpoints(base_url="http://localhost:8000"):
     print("=" * 60)
 
     # 1. Status
+    auth_token = None
     try:
         t0 = time.time()
         with urllib.request.urlopen(f"{base_url}/api/status", timeout=3) as resp:
             data = json.loads(resp.read().decode())
             lat = (time.time() - t0) * 1000
-            print(f" [OK] /api/status -> Status: {data.get('status')} | Hostname: {data.get('hostname')} | IP: {data.get('local_ip')} | MAC: {data.get('mac_address')} ({lat:.1f}ms)")
+            print(f" [OK] /api/status -> Status: {data.get('status')} | Hostname: {data.get('hostname')} | IP: {data.get('local_ip')} | MAC: {data.get('mac_address')} | AuthRequired: {data.get('auth_required')} ({lat:.1f}ms)")
     except Exception as e:
         print(f" [ERRO] Servidor parece estar desligado ou inacessível em {base_url}: {e}")
         return False
 
+    # 2. Pareamento com PIN de Segurança
+    try:
+        pin = "123456"
+        try:
+            import os
+            cfg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+            if os.path.exists(cfg_path):
+                with open(cfg_path, "r", encoding="utf-8") as f:
+                    pin = json.load(f).get("security", {}).get("pin", "123456")
+        except Exception:
+            pass
+
+        t0 = time.time()
+        pair_req = urllib.request.Request(
+            f"{base_url}/api/auth/pair",
+            data=json.dumps({"pin": pin}).encode("utf-8"),
+            headers={"Content-Type": "application/json"}
+        )
+        with urllib.request.urlopen(pair_req, timeout=3) as resp:
+            pair_data = json.loads(resp.read().decode())
+            auth_token = pair_data.get("auth_token")
+            lat = (time.time() - t0) * 1000
+            print(f" [OK] /api/auth/pair -> Pareamento autenticado com PIN {pin} ({lat:.1f}ms)")
+    except Exception as e:
+        print(f" [AVISO] /api/auth/pair falhou: {e}")
+
+    def auth_headers():
+        h = {}
+        if auth_token:
+            h["X-MacroEngine-Key"] = auth_token
+        return h
+
+    def open_url(url):
+        req = urllib.request.Request(url, headers=auth_headers())
+        return urllib.request.urlopen(req, timeout=3)
+
     # 2. WoL Info
     try:
         t0 = time.time()
-        with urllib.request.urlopen(f"{base_url}/api/wol/info", timeout=3) as resp:
+        with open_url(f"{base_url}/api/wol/info") as resp:
             data = json.loads(resp.read().decode())
             lat = (time.time() - t0) * 1000
             print(f" [OK] /api/wol/info -> MAC Físico: {data.get('mac_address')} | Placa: {data.get('adapter_name')} ({lat:.1f}ms)")
@@ -80,7 +117,7 @@ def check_endpoints(base_url="http://localhost:8000"):
     # 3. Macros
     try:
         t0 = time.time()
-        with urllib.request.urlopen(f"{base_url}/api/macros", timeout=3) as resp:
+        with open_url(f"{base_url}/api/macros") as resp:
             macros = json.loads(resp.read().decode())
             lat = (time.time() - t0) * 1000
             categories = set(m.get('category') for m in macros)
@@ -91,7 +128,7 @@ def check_endpoints(base_url="http://localhost:8000"):
     # 4. Latência de Frame do PC
     try:
         t0 = time.time()
-        with urllib.request.urlopen(f"{base_url}/api/screen/frame", timeout=3) as resp:
+        with open_url(f"{base_url}/api/screen/frame") as resp:
             raw = resp.read()
             lat = (time.time() - t0) * 1000
             print(f" [OK] /api/screen/frame -> Frame capturado ({len(raw)} bytes) | Latência: {lat:.1f}ms")
@@ -101,7 +138,7 @@ def check_endpoints(base_url="http://localhost:8000"):
     # 5. Autostart Status
     try:
         t0 = time.time()
-        with urllib.request.urlopen(f"{base_url}/api/autostart/status", timeout=3) as resp:
+        with open_url(f"{base_url}/api/autostart/status") as resp:
             data = json.loads(resp.read().decode())
             lat = (time.time() - t0) * 1000
             print(f" [OK] /api/autostart/status -> Windows Autostart: {data.get('autostart_enabled')} ({lat:.1f}ms)")
@@ -111,7 +148,7 @@ def check_endpoints(base_url="http://localhost:8000"):
     # 6. Configuração do Servidor
     try:
         t0 = time.time()
-        with urllib.request.urlopen(f"{base_url}/api/config", timeout=3) as resp:
+        with open_url(f"{base_url}/api/config") as resp:
             cfg = json.loads(resp.read().decode())
             lat = (time.time() - t0) * 1000
             print(f" [OK] /api/config -> Porta: {cfg.get('server', {}).get('port')} | Tray: {cfg.get('server', {}).get('enable_tray_icon')} ({lat:.1f}ms)")
@@ -120,7 +157,7 @@ def check_endpoints(base_url="http://localhost:8000"):
 
     # 7. Swagger Docs
     try:
-        with urllib.request.urlopen(f"{base_url}/docs", timeout=3) as resp:
+        with open_url(f"{base_url}/docs") as resp:
             print(f" [OK] /docs -> Documentação Swagger OpenAPI ativa (HTTP {resp.status})")
     except Exception as e:
         print(f" [AVISO] /docs falhou: {e}")
@@ -128,7 +165,7 @@ def check_endpoints(base_url="http://localhost:8000"):
     # 8. Transferência de Arquivos (Shared Files)
     try:
         t0 = time.time()
-        with urllib.request.urlopen(f"{base_url}/api/files/list", timeout=3) as resp:
+        with open_url(f"{base_url}/api/files/list") as resp:
             data = json.loads(resp.read().decode())
             lat = (time.time() - t0) * 1000
             file_count = len(data.get("files", []))

@@ -1,19 +1,26 @@
-{
+﻿{
   "server": {
     "host": "0.0.0.0",
     "port": 8000,
     "log_level": "info",
     "enable_tray_icon": true
   },
+  "security": {
+    "require_auth": true,
+    "pin": "",
+    "auth_token": "",
+    "paired_devices": []
+  },
   "screen_capture": {
     "fps": 30,
     "quality": 75,
-    "max_width": 1280
+    "preferred_monitor": 1
   },
-  "audio_streaming": {
-    "default_port": 50005,
+  "audio": {
+    "port": 50005,
     "sample_rate": 44100,
-    "channels": 2
+    "channels": 2,
+    "buffer_size": 2048
   },
   "scrcpy": {
     "auto_detect": true,
