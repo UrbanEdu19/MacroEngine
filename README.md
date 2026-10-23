@@ -522,6 +522,10 @@ O script testa automaticamente:
 ## 📁 Estrutura de Arquivos
 
 ```text
+├── MacroEngine-1.2.6v.apk        # Instalador Android oficial v1.2.6v (OBS Studio v5, Player Universal Now Playing, Sparklines Hardware, UDP Zero-Config)
+├── media_service.py              # Integracao Universal Windows Media Session (Now Playing com capa Base64)
+├── obs_service.py                # Integracao OBS Studio WebSocket v5 (Cenas, Live, Gravacao, Mute)
+├── build_exe.py                  # Script de compilacao automatizada do MacroEngineServer.exe
 ├── MacroEngine-1.2.5v.apk        # Instalador Android oficial v1.2.5v (Pareamento Seguro PIN, Tunnel Remoto, Monitor Hardware HUD)
 ├── MacroEngine-1.2.4v.apk        # Instalador Android oficial v1.2.4v (Backup Integral Externo, Adicionar/Pinar Sites)
 ├── MacroEngine-1.2.3v.apk        # Instalador Android oficial v1.2.3v (Multi-Idiomas, UDP Beacon, Windows HUD)

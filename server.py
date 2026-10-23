@@ -16,9 +16,26 @@ import json
 import psutil
 from datetime import datetime
 from typing import Optional, Dict, Any, List
+from collections import deque
+import media_service
+from obs_service import obs_manager
+
+# Buffers de Histórico para Gráficos em Tempo Real (Item 4)
+_history_cpu_temp = deque(maxlen=60)
+_history_gpu_temp = deque(maxlen=60)
+_history_cpu_percent = deque(maxlen=60)
+_history_ram_percent = deque(maxlen=60)
+_history_net_down = deque(maxlen=60)
+_history_net_up = deque(maxlen=60)
+
+# Diretorio Raiz da Aplicacao (Compativel com PyInstaller Frozen e Python Script)
+if getattr(sys, 'frozen', False):
+    APP_ROOT_DIR = os.path.dirname(sys.executable)
+else:
+    APP_ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Compatibilidade UTF-8 e proteção para execução em background (pythonw)
-_log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "server_debug.log")
+_log_path = os.path.join(APP_ROOT_DIR, "server_debug.log")
 if sys.platform == "win32":
     if sys.stdout is None:
         try:
@@ -96,8 +113,8 @@ logger = logging.getLogger("MacroEngineServer")
 # ---------------------------------------------------------------------------
 # CONFIGURAÇÕES E GERENCIAMENTO DE INICIALIZAÇÃO AUTOMÁTICA
 # ---------------------------------------------------------------------------
-CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
-SHARED_FILES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "shared_files")
+CONFIG_PATH = os.path.join(APP_ROOT_DIR, "config.json")
+SHARED_FILES_DIR = os.path.join(APP_ROOT_DIR, "shared_files")
 os.makedirs(SHARED_FILES_DIR, exist_ok=True)
 
 def format_file_size(size_bytes: int) -> str:
@@ -201,7 +218,7 @@ def load_config() -> dict:
 def update_pin_text_file(pin: str, paired_devices: list = None):
     """Cria e atualiza o arquivo SEU_CODIGO_DE_PAREAMENTO.txt na pasta do servidor."""
     try:
-        txt_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "SEU_CODIGO_DE_PAREAMENTO.txt")
+        txt_path = os.path.join(APP_ROOT_DIR, "SEU_CODIGO_DE_PAREAMENTO.txt")
         paired_info = ""
         if paired_devices:
             paired_info = "\n  DISPOSITIVOS AUTORIZADOS SALVOS NO PC:\n"
@@ -319,7 +336,7 @@ def set_windows_autostart(enable: bool) -> bool:
     if sys.platform != "win32":
         return False
 
-    base_dir = os.path.dirname(os.path.abspath(__file__))
+    base_dir = APP_ROOT_DIR
     vbs_path = os.path.join(base_dir, "run_silent.vbs")
     cmd = f'wscript.exe "{vbs_path}"'
     success = False
@@ -693,7 +710,9 @@ PUBLIC_PATHS = {
     "/api/tunnel/start",
     "/api/tunnel/stop",
     "/api/wol/info",
-    "/api/download/apk"
+    "/api/download/apk",
+    "/api/version",
+    "/api/check_update"
 }
 
 @app.middleware("http")
@@ -2215,7 +2234,7 @@ class CloudflareTunnelManager:
         self.lock = threading.RLock()
 
     def get_bin_path(self) -> str:
-        current_dir = os.path.dirname(os.path.abspath(__file__))
+        current_dir = APP_ROOT_DIR
         local_bin = os.path.join(current_dir, "cloudflared.exe" if sys.platform == "win32" else "cloudflared")
         if os.path.exists(local_bin):
             return local_bin
@@ -3294,7 +3313,7 @@ def execute_actions(payload: ExecuteActionsRequest):
         "results": results
     }
 
-SERVER_MODELS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
+SERVER_MODELS_DIR = os.path.join(APP_ROOT_DIR, "models")
 os.makedirs(SERVER_MODELS_DIR, exist_ok=True)
 
 @app.api_route("/api/models/slm_model.bin", methods=["GET", "HEAD"])
@@ -3311,7 +3330,7 @@ def download_server_slm_model():
 @app.get("/api/download/apk")
 def download_app_apk():
     """Permite ao usuário baixar o APK atualizado diretamente pelo celular ou PC."""
-    server_dir = os.path.dirname(os.path.abspath(__file__))
+    server_dir = APP_ROOT_DIR
     for f in sorted(os.listdir(server_dir), reverse=True):
         if f.startswith("MacroEngine-") and f.endswith(".apk"):
             return FileResponse(os.path.join(server_dir, f), filename=f, media_type="application/vnd.android.package-archive")
@@ -3326,10 +3345,13 @@ def download_app_apk():
 # ---------------------------------------------------------------------------
 @app.post("/api/files/upload")
 async def upload_file(file: UploadFile = File(...)):
-    """Recebe um arquivo enviado do celular ou outro dispositivo e salva na pasta compartilhada do PC."""
+    """Recebe um arquivo enviado do celular ou outro dispositivo e salva na pasta compartilhada do PC (sem limite de tamanho)."""
+    dest_path = None
     try:
         raw_name = file.filename or "arquivo_recebido"
         safe_filename = os.path.basename(raw_name)
+        if not safe_filename or safe_filename in {".", ".."}:
+            safe_filename = "arquivo_recebido"
         dest_path = os.path.join(SHARED_FILES_DIR, safe_filename)
 
         # Se já existir um arquivo com o mesmo nome, adiciona timestamp para evitar sobrescrever
@@ -3355,6 +3377,11 @@ async def upload_file(file: UploadFile = File(...)):
             "directory": SHARED_FILES_DIR
         }
     except Exception as e:
+        if dest_path and os.path.exists(dest_path):
+            try:
+                os.remove(dest_path)
+            except Exception:
+                pass
         logger.error(f"Erro ao receber upload de arquivo: {e}")
         raise HTTPException(status_code=500, detail=f"Erro ao salvar arquivo: {str(e)}")
 
@@ -4248,6 +4275,19 @@ def get_hardware_telemetry():
     else:
         uptime_str = f"{minutes}m"
 
+    # Atualiza buffers de histórico para gráficos em tempo real (Item 4)
+    _history_cpu_temp.append(estimated_cpu_temp)
+    if gpu and isinstance(gpu, dict) and gpu.get("temperature_c", 0) > 0:
+        _history_gpu_temp.append(gpu["temperature_c"])
+    elif len(_history_gpu_temp) > 0:
+        _history_gpu_temp.append(_history_gpu_temp[-1])
+    else:
+        _history_gpu_temp.append(0)
+    _history_cpu_percent.append(round(cpu_percent, 1))
+    _history_ram_percent.append(round(ram.percent, 1))
+    _history_net_down.append(round(max(0.0, download_kbps), 1))
+    _history_net_up.append(round(max(0.0, upload_kbps), 1))
+
     return {
         "status": "ok",
         "timestamp": int(now),
@@ -4277,6 +4317,14 @@ def get_hardware_telemetry():
         },
         "gpu": gpu,
         "disks": disks,
+        "history": {
+            "cpu_temp": list(_history_cpu_temp),
+            "gpu_temp": list(_history_gpu_temp),
+            "cpu_percent": list(_history_cpu_percent),
+            "ram_percent": list(_history_ram_percent),
+            "net_down_kbps": list(_history_net_down),
+            "net_up_kbps": list(_history_net_up)
+        },
         "system": {
             "uptime_str": uptime_str,
             "uptime_seconds": uptime_sec,
@@ -5291,7 +5339,7 @@ class UdpDiscoveryBeacon:
                             "hostname": socket.gethostname(),
                             "ip": self._get_local_ip(),
                             "port": self.server_port,
-                            "version": "1.2.5v"
+                            "version": "1.2.6v"
                         }
                         sock.sendto(json.dumps(response).encode("utf-8"), addr)
                 except socket.timeout:
@@ -5316,7 +5364,7 @@ class UdpDiscoveryBeacon:
                         "hostname": socket.gethostname(),
                         "ip": self._get_local_ip(),
                         "port": self.server_port,
-                        "version": "1.2.5v"
+                        "version": "1.2.6v"
                     }
                     data = json.dumps(payload).encode("utf-8")
                     sock.sendto(data, ("255.255.255.255", self.beacon_port))
@@ -5347,6 +5395,119 @@ def api_notify_windows(payload: NotifyRequest):
     success = show_windows_toast(payload.title, payload.message)
     return {"status": "ok" if success else "error", "title": payload.title, "message": payload.message}
 
+
+# ===========================================================================
+# NOW PLAYING / UNIVERSAL MEDIA CONTROLLER (Item 3)
+# ===========================================================================
+class MediaControlRequest(BaseModel):
+    action: str  # "play", "pause", "toggle", "next", "previous", "stop", "seek"
+    position_seconds: Optional[int] = None
+
+@app.get("/api/media/current")
+async def api_get_current_media():
+    """Retorna a mídia em reprodução no Windows (título, artista, álbum, duração e capa base64)."""
+    try:
+        return await asyncio.wait_for(media_service.get_system_media_info(), timeout=2.0)
+    except Exception as e:
+        return media_service._last_media_info
+
+@app.post("/api/media/control")
+async def api_control_media(req: MediaControlRequest):
+    """Envia comandos de controle de mídia para o player ativo do Windows."""
+    success = await media_service.control_system_media(req.action, req.position_seconds)
+    return {"status": "ok" if success else "error", "action": req.action}
+
+@app.get("/api/media/thumbnail")
+def api_get_media_thumbnail():
+    """Retorna os bytes brutos da imagem de capa do player em execução."""
+    from fastapi.responses import Response
+    raw = media_service.get_current_thumbnail_bytes()
+    if raw:
+        return Response(content=raw, media_type="image/jpeg")
+    raise HTTPException(status_code=404, detail="Nenhuma capa de mídia ativa")
+
+# ===========================================================================
+# OBS STUDIO WEBSOCKET INTEGRATION (Item 2)
+# ===========================================================================
+class ObsSceneRequest(BaseModel):
+    scene_name: str
+
+class ObsMuteRequest(BaseModel):
+    input_name: str = "Mic/Aux"
+
+@app.get("/api/obs/status")
+def api_get_obs_status():
+    """Retorna o status de conexão com OBS Studio, cenas, live e gravação."""
+    return obs_manager.get_status()
+
+@app.post("/api/obs/connect")
+def api_connect_obs():
+    """Força uma tentativa de conexão com o OBS Studio."""
+    connected = obs_manager.connect()
+    return {"status": "connected" if connected else "failed"}
+
+@app.post("/api/obs/scene")
+def api_set_obs_scene(req: ObsSceneRequest):
+    """Altera a cena atual de transmissão no OBS Studio."""
+    success = obs_manager.set_current_scene(req.scene_name)
+    return {"status": "ok" if success else "error", "scene": req.scene_name}
+
+@app.post("/api/obs/stream")
+def api_toggle_obs_stream():
+    """Inicia ou encerra a transmissão ao vivo no OBS."""
+    success = obs_manager.toggle_stream()
+    return {"status": "ok" if success else "error", "is_streaming": obs_manager.is_streaming}
+
+@app.post("/api/obs/record")
+def api_toggle_obs_record():
+    """Inicia ou encerra a gravação de vídeo local no OBS."""
+    success = obs_manager.toggle_record()
+    return {"status": "ok" if success else "error", "is_recording": obs_manager.is_recording}
+
+@app.post("/api/obs/mute")
+def api_toggle_obs_mute(req: ObsMuteRequest):
+    """Alterna o mute do microfone no OBS Studio."""
+    success = obs_manager.toggle_input_mute(req.input_name)
+    return {"status": "ok" if success else "error", "mic_muted": obs_manager.mic_muted}
+
+# ===========================================================================
+# VERIFICAÇÃO DE VERSÃO & ATUALIZAÇÕES FUTURAS
+# ===========================================================================
+SERVER_VERSION = "1.2.6v"
+
+@app.get("/api/version")
+def api_get_server_version():
+    """Retorna a versão do servidor desktop para sincronização com o app."""
+    return {
+        "version": SERVER_VERSION,
+        "name": "MacroEngine Desktop Server",
+        "platform": platform.system(),
+        "arch": platform.machine()
+    }
+
+@app.get("/api/check_update")
+def api_check_update():
+    """Consulta o GitHub para checar novas versões do MacroEngine."""
+    try:
+        import urllib.request
+        req = urllib.request.Request(
+            "https://api.github.com/repos/UrbanEdu19/MacroEngine/releases/latest",
+            headers={"User-Agent": "MacroEngine-Desktop"}
+        )
+        with urllib.request.urlopen(req, timeout=4.0) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            latest_tag = data.get("tag_name", "").lstrip("v")
+            current_clean = SERVER_VERSION.replace("v", "")
+            has_update = latest_tag != "" and latest_tag != current_clean
+            return {
+                "has_update": has_update,
+                "current_version": SERVER_VERSION,
+                "latest_version": latest_tag,
+                "release_url": data.get("html_url", ""),
+                "notes": data.get("body", "")
+            }
+    except Exception as e:
+        return {"has_update": False, "error": str(e), "current_version": SERVER_VERSION}
 
 
 if __name__ == "__main__":
