@@ -55,6 +55,7 @@ Desktop.ini
 # Binários pesados
 cloudflared.exe
 *.exe
+*.zip
 *.apk
 !MacroEngine-*.apk
 *.aab
